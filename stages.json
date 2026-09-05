@@ -1,0 +1,45 @@
+{
+  "1": {
+    "name": "Stage 1 - Latent",
+    "medication": "Isoniazid (preventive therapy)",
+    "precautions": [
+      "Regular follow-up checkups",
+      "No isolation needed - not contagious"
+    ],
+    "diet": "Balanced diet with adequate protein",
+    "warning": "Consult doctor if symptoms like cough or fever develop"
+  },
+  "2": {
+    "name": "Stage 2 - Mild",
+    "medication": "Isoniazid + Rifampicin",
+    "precautions": [
+      "Wear mask indoors",
+      "Avoid crowded places",
+      "Complete full medication course"
+    ],
+    "diet": "High protein, vitamin-rich diet",
+    "warning": "See doctor immediately if coughing blood"
+  },
+  "3": {
+    "name": "Stage 3 - Moderate",
+    "medication": "4-drug regimen (HRZE: Isoniazid, Rifampicin, Pyrazinamide, Ethambutol)",
+    "precautions": [
+      "Isolate from family members",
+      "Daily symptom monitoring",
+      "Strict medication schedule"
+    ],
+    "diet": "High calorie, high protein diet",
+    "warning": "Seek emergency care if breathlessness occurs"
+  },
+  "4": {
+    "name": "Stage 4 - Severe",
+    "medication": "Extended HRZE regimen + specialist supervision",
+    "precautions": [
+      "Hospitalization strongly advised",
+      "Complete isolation",
+      "Continuous monitoring"
+    ],
+    "diet": "Supervised nutrition plan, possibly IV nutrition",
+    "warning": "Immediate hospital admission required"
+  }
+}
