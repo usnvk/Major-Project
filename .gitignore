@@ -1,0 +1,12 @@
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+feedback.db
+backend/feedback.db
+backend/models/*.pth
+Model/venv/
+Model/__pycache__/
+Model/logs/
+Model/dataset/
+Model/**/*.pth
