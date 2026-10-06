@@ -20,7 +20,7 @@ import {
   Info,
   Clock,
 } from 'lucide-react';
-import { fetchFLMetrics, fetchRetrainStatus, triggerRetraining } from '../services/api';
+import { fetchFLMetrics, fetchRetrainStatus, triggerRetraining, fetchActiveLearningQueue } from '../services/api';
 import { DP_CONFIG, FL_CONFIG, CENTRALIZED_BASELINE } from '../utils/flData';
 
 // Tiny SVG Sparkline
@@ -70,6 +70,7 @@ export default function FederatedMonitorPage() {
     is_retraining: false,
     status: 'idle',
   });
+  const [queueData, setQueueData] = useState(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isTriggering, setIsTriggering] = useState(false);
   const [retrainMsg, setRetrainMsg] = useState(null);
@@ -78,9 +79,10 @@ export default function FederatedMonitorPage() {
   // Load backend metrics and retraining status
   const loadData = async () => {
     try {
-      const [flRes, retrainRes] = await Promise.all([
+      const [flRes, retrainRes, qRes] = await Promise.all([
         fetchFLMetrics(),
         fetchRetrainStatus(),
+        fetchActiveLearningQueue(),
       ]);
 
       if (flRes.success && flRes.data) {
@@ -88,6 +90,9 @@ export default function FederatedMonitorPage() {
       }
       if (retrainRes.success && retrainRes.data) {
         setRetrainInfo(retrainRes.data);
+      }
+      if (qRes?.success && qRes.data) {
+        setQueueData(qRes.data);
       }
     } catch (err) {
       console.warn('Error fetching federated metrics:', err);
@@ -248,10 +253,17 @@ export default function FederatedMonitorPage() {
               threshold (<span className="font-bold text-sky-400">≥ {retrainInfo.threshold} entries</span>), the backend
               triggers an incremental federated training round without moving private patient X-rays.
             </p>
-            <div className="flex items-center gap-4 pt-1 text-xs">
+            <div className="flex flex-wrap items-center gap-4 pt-1 text-xs">
               <span className="text-slate-400">
-                Current Feedback Audit Count:{' '}
+                Doctor Feedback Count:{' '}
                 <span className="font-bold text-white font-mono">{retrainInfo.feedback_count}</span> / {retrainInfo.threshold}
+              </span>
+              <span className="text-slate-400">·</span>
+              <span className="text-slate-400">
+                Active Learning Queue:{' '}
+                <span className="font-bold text-sky-400 font-mono">
+                  {queueData?.stats?.pending_count ?? 0} pending edge case(s)
+                </span>
               </span>
               <span className="text-slate-400">·</span>
               <span className="text-slate-400">
@@ -267,6 +279,13 @@ export default function FederatedMonitorPage() {
                 >
                   {retrainInfo.is_retraining ? 'Retraining in progress...' : retrainInfo.status}
                 </span>
+              </span>
+              <span className="text-slate-400">·</span>
+              <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] bg-sky-950 text-sky-300 border border-sky-800 font-mono">
+                FedProx (μ=0.01) Active
+              </span>
+              <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] bg-indigo-950 text-indigo-300 border border-indigo-800 font-mono">
+                Byzantine-Resilient
               </span>
             </div>
           </div>

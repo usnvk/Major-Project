@@ -37,8 +37,8 @@ export default function HistoryPage({ historyData, onViewScanDetail }) {
       {/* Top Banner */}
       <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900 tracking-tight flex items-center space-x-3">
-            <History className="w-7 h-7 text-sky-600" />
+          <h1 className="text-2xl font-bold text-[#0F172A] tracking-tight flex items-center space-x-3">
+            <History className="w-7 h-7 text-[#2563EB]" />
             <span>Patient Scan History & Audit Trail</span>
           </h1>
           <p className="text-xs text-slate-500 mt-1">

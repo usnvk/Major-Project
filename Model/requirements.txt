@@ -1,6 +1,7 @@
 torch>=2.0.0
 torchvision>=0.15.0
 flwr>=1.8.0
+grpcio>=1.60.0
 grad-cam
 matplotlib>=3.7.0
 numpy>=1.24.0,<2.0.0
@@ -9,4 +10,5 @@ scikit-learn>=1.2.0
 pillow>=9.5.0
 medmnist>=3.0.0
 opacus>=1.4.0
-
+pydicom>=2.4.0
+cryptography>=41.0.0

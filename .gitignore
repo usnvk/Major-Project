@@ -10,3 +10,8 @@ Model/__pycache__/
 Model/logs/
 Model/dataset/
 Model/**/*.pth
+*.key
+Model/certificates/*.key
+*.db
+backend/*.db
+backend/edge_storage/

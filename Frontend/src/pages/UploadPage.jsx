@@ -3,9 +3,13 @@ import UploadDropzone from '../components/UploadDropzone';
 import LoadingSpinner from '../components/LoadingSpinner';
 import ErrorMessage from '../components/ErrorMessage';
 import { predictXray } from '../services/api';
+import { useAuth } from '../context/AuthContext';
 
 export default function UploadPage({ onPredictionSuccess }) {
+  const { user } = useAuth();
   const [selectedFile, setSelectedFile] = useState(null);
+  const [patientId, setPatientId] = useState(user?.role === 'patient' ? (user?.patient_hash || '') : '');
+  const [patientName, setPatientName] = useState(user?.role === 'patient' ? (user?.name || '') : '');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
 
@@ -16,13 +20,18 @@ export default function UploadPage({ onPredictionSuccess }) {
     setError(null);
 
     try {
-      const response = await predictXray(selectedFile);
+      const pId = patientId.trim() || (user?.role === 'patient' ? (user?.patient_hash || user?.email) : null);
+      const pName = patientName.trim() || (user?.role === 'patient' ? user?.name : null);
+      const uEmail = user?.email || null;
+
+      const response = await predictXray(selectedFile, pId, pName, uEmail);
 
       if (response.success && response.data) {
-        // Pass original file reference + prediction payload to parent state
         onPredictionSuccess({
           file: selectedFile,
           originalImage: URL.createObjectURL(selectedFile),
+          patient_id: response.data.patient_hash || pId,
+          patient_name: response.data.patient_name || pName,
           ...response.data
         });
       } else {
@@ -39,8 +48,8 @@ export default function UploadPage({ onPredictionSuccess }) {
     <div className="space-y-6">
       {isLoading ? (
         <LoadingSpinner
-          title="Analyzing Chest X-Ray..."
-          subtitle="Running ResNet-50 Convolutional Neural Network pipeline for Tuberculosis pulmonary infiltrate classification and Grad-CAM spatial heatmap rendering."
+          title="Analyzing Chest Radiograph..."
+          subtitle="Running ResNet-18 Convolutional Neural Network pipeline for Tuberculosis pulmonary feature classification and Grad-CAM spatial heatmap rendering."
         />
       ) : (
         <>
@@ -61,6 +70,11 @@ export default function UploadPage({ onPredictionSuccess }) {
             }}
             onAnalyze={handleAnalyze}
             isLoading={isLoading}
+            patientId={patientId}
+            setPatientId={setPatientId}
+            patientName={patientName}
+            setPatientName={setPatientName}
+            currentUser={user}
           />
         </>
       )}

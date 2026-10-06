@@ -7,19 +7,36 @@ export default {
   theme: {
     extend: {
       colors: {
+        brand: {
+          blue: '#2563EB',
+          blueHover: '#1E40AF',
+          teal: '#0D9488',
+          bg: '#F8FAFC',
+          card: '#FFFFFF',
+          text: '#0F172A',
+          muted: '#64748B',
+          border: '#E2E8F0',
+          success: '#16A34A',
+          successBg: '#F0FDF4',
+          warning: '#F59E0B',
+          warningBg: '#FFFBEB',
+          error: '#DC2626',
+          errorBg: '#FEF2F2',
+        },
         medical: {
-          50: '#f0f9ff',
-          100: '#e0f2fe',
-          500: '#0284c7',
-          600: '#0284c7',
-          700: '#0369a1',
-          800: '#075985',
-          900: '#0c4a6e',
-          dark: '#0f172a'
+          50: '#eff6ff',
+          100: '#dbeafe',
+          500: '#2563EB',
+          600: '#2563EB',
+          700: '#1d4ed8',
+          800: '#1e40af',
+          900: '#1e3a8a',
+          teal: '#0D9488',
+          dark: '#0f172a',
         }
       },
       fontFamily: {
-        sans: ['Inter', 'sans-serif'],
+        sans: ['Inter', 'system-ui', 'sans-serif'],
       }
     },
   },
