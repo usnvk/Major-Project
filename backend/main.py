@@ -172,6 +172,7 @@ class FLUpdateSubmitInput(BaseModel):
     epsilon: float
     num_samples: int
     size_mb: float = 11.2
+    weights_hash: str | None = None
 
 
 class FLEventEmitInput(BaseModel):
@@ -938,6 +939,7 @@ def submit_fl_update(payload: FLUpdateSubmitInput):
         epsilon=payload.epsilon or 0.42,
         num_samples=payload.num_samples,
         size_mb=payload.size_mb,
+        weights_hash=payload.weights_hash,
     )
     if res.get("status") == "error":
         raise HTTPException(status_code=400, detail=res.get("message"))
