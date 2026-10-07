@@ -140,21 +140,25 @@ export default function AdminDashboard({ onNavigate }) {
 
   const nodeA = flNodes.find((n) => n.node_id === 'node_A') || {
     name: 'Hospital A (Urban Referral)',
-    status: 'online',
+    status: 'offline',
     model_version: currentGlobalVersion,
     dataset_size: 120,
-    last_loss: 0.42,
-    last_acc: 86.4,
+    last_loss: null,
+    last_acc: null,
   };
 
   const nodeB = flNodes.find((n) => n.node_id === 'node_B') || {
     name: 'Hospital B (Rural Clinic)',
-    status: 'online',
+    status: 'offline',
     model_version: currentGlobalVersion,
     dataset_size: 120,
-    last_loss: 0.44,
-    last_acc: 85.9,
+    last_loss: null,
+    last_acc: null,
   };
+
+  const isNodeAOnline = nodeA.status === 'online';
+  const isNodeBOnline = nodeB.status === 'online';
+  const onlineCount = (isNodeAOnline ? 1 : 0) + (isNodeBOnline ? 1 : 0);
 
   return (
     <div className="space-y-6 animate-fade-in pb-16 max-w-7xl mx-auto">
@@ -237,10 +241,24 @@ export default function AdminDashboard({ onNavigate }) {
         {/* Connected Nodes */}
         <div className="bg-white p-5 rounded-2xl border border-[#E2E8F0] shadow-[0_1px_3px_rgba(0,0,0,0.02)]">
           <div className="text-xs font-semibold text-[#64748B] uppercase tracking-wider">Connected Nodes</div>
-          <div className="text-2xl font-bold text-[#0F172A] mt-1">2 / 2</div>
-          <div className="text-xs text-[#16A34A] mt-1 flex items-center gap-1 font-medium">
-            <span className="w-1.5 h-1.5 rounded-full bg-[#16A34A]" />
-            <span>All nodes online</span>
+          <div className="text-2xl font-bold text-[#0F172A] mt-1">{onlineCount} / 2</div>
+          <div className="text-xs mt-1 flex items-center gap-1 font-medium">
+            {onlineCount === 2 ? (
+              <>
+                <span className="w-1.5 h-1.5 rounded-full bg-[#16A34A]" />
+                <span className="text-[#16A34A]">All nodes online</span>
+              </>
+            ) : onlineCount === 1 ? (
+              <>
+                <span className="w-1.5 h-1.5 rounded-full bg-[#D97706]" />
+                <span className="text-[#D97706]">1 node online (waiting for 2nd)</span>
+              </>
+            ) : (
+              <>
+                <span className="w-1.5 h-1.5 rounded-full bg-[#94A3B8]" />
+                <span className="text-[#64748B]">No nodes connected</span>
+              </>
+            )}
           </div>
         </div>
 
@@ -302,11 +320,17 @@ export default function AdminDashboard({ onNavigate }) {
               <div className="p-3.5 bg-white border border-[#E2E8F0] rounded-xl shadow-xs space-y-1.5">
                 <div className="flex items-center justify-between">
                   <span className="font-bold text-[#0F172A] text-xs">HOSPITAL A</span>
-                  <span className="text-[10px] font-semibold text-[#16A34A] bg-[#F0FDF4] px-1.5 py-0.2 rounded border border-[#DCFCE7]">
-                    ● Online
-                  </span>
+                  {isNodeAOnline ? (
+                    <span className="text-[10px] font-semibold text-[#16A34A] bg-[#F0FDF4] px-1.5 py-0.2 rounded border border-[#DCFCE7]">
+                      ● Online
+                    </span>
+                  ) : (
+                    <span className="text-[10px] font-semibold text-[#64748B] bg-slate-100 px-1.5 py-0.2 rounded border border-[#E2E8F0]">
+                      ○ Offline
+                    </span>
+                  )}
                 </div>
-                <div className="text-[11px] text-[#64748B]">Dataset: 120 Radiographs (Local)</div>
+                <div className="text-[11px] text-[#64748B]">Dataset: {nodeA.dataset_size || 120} Radiographs (Local)</div>
                 <div className="text-[11px] text-[#0D9488] font-medium flex items-center gap-1">
                   <Lock className="w-3 h-3" /> Opacus DP-SGD Local Training
                 </div>
@@ -319,11 +343,17 @@ export default function AdminDashboard({ onNavigate }) {
               <div className="p-3.5 bg-white border border-[#E2E8F0] rounded-xl shadow-xs space-y-1.5">
                 <div className="flex items-center justify-between">
                   <span className="font-bold text-[#0F172A] text-xs">HOSPITAL B</span>
-                  <span className="text-[10px] font-semibold text-[#16A34A] bg-[#F0FDF4] px-1.5 py-0.2 rounded border border-[#DCFCE7]">
-                    ● Online
-                  </span>
+                  {isNodeBOnline ? (
+                    <span className="text-[10px] font-semibold text-[#16A34A] bg-[#F0FDF4] px-1.5 py-0.2 rounded border border-[#DCFCE7]">
+                      ● Online
+                    </span>
+                  ) : (
+                    <span className="text-[10px] font-semibold text-[#64748B] bg-slate-100 px-1.5 py-0.2 rounded border border-[#E2E8F0]">
+                      ○ Offline
+                    </span>
+                  )}
                 </div>
-                <div className="text-[11px] text-[#64748B]">Dataset: 120 Radiographs (Local)</div>
+                <div className="text-[11px] text-[#64748B]">Dataset: {nodeB.dataset_size || 120} Radiographs (Local)</div>
                 <div className="text-[11px] text-[#0D9488] font-medium flex items-center gap-1">
                   <Lock className="w-3 h-3" /> Opacus DP-SGD Local Training
                 </div>
@@ -366,9 +396,15 @@ export default function AdminDashboard({ onNavigate }) {
               <h3 className="font-bold text-sm text-[#0F172A]">Hospital A</h3>
               <p className="text-[11px] text-[#64748B]">Urban Referral Center</p>
             </div>
-            <span className="inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-0.5 rounded-full bg-[#F0FDF4] text-[#16A34A] border border-[#DCFCE7]">
-              ● Connected
-            </span>
+            {isNodeAOnline ? (
+              <span className="inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-0.5 rounded-full bg-[#F0FDF4] text-[#16A34A] border border-[#DCFCE7]">
+                ● Connected
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-0.5 rounded-full bg-slate-100 text-[#64748B] border border-[#E2E8F0]">
+                ○ Disconnected
+              </span>
+            )}
           </div>
 
           <div className="space-y-2 text-xs">
@@ -378,19 +414,21 @@ export default function AdminDashboard({ onNavigate }) {
             </div>
             <div className="flex justify-between">
               <span className="text-[#64748B]">Dataset:</span>
-              <span className="font-semibold text-[#0F172A]">{nodeA.dataset_size} CXRs</span>
+              <span className="font-semibold text-[#0F172A]">{nodeA.dataset_size || 120} CXRs</span>
             </div>
             <div className="flex justify-between">
-              <span className="text-[#64748B]">Training:</span>
-              <span className="font-semibold text-[#0F172A]">Idle / Ready</span>
+              <span className="text-[#64748B]">Status:</span>
+              <span className={`font-semibold ${isNodeAOnline ? 'text-[#16A34A]' : 'text-[#64748B]'}`}>
+                {isNodeAOnline ? 'Idle / Ready' : 'Node Offline'}
+              </span>
             </div>
             <div className="flex justify-between">
               <span className="text-[#64748B]">Loss:</span>
-              <span className="font-mono text-[#0F172A]">{nodeA.last_loss ?? 0.42}</span>
+              <span className="font-mono text-[#0F172A]">{nodeA.last_loss ?? '—'}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-[#64748B]">Accuracy:</span>
-              <span className="font-mono font-semibold text-[#16A34A]">{nodeA.last_acc ?? 86.4}%</span>
+              <span className="font-mono font-semibold text-[#16A34A]">{nodeA.last_acc ? `${nodeA.last_acc}%` : '—'}</span>
             </div>
             <div className="flex justify-between pt-1 border-t border-[#E2E8F0]">
               <span className="text-[#64748B]">DP-SGD:</span>
@@ -406,9 +444,15 @@ export default function AdminDashboard({ onNavigate }) {
               <h3 className="font-bold text-sm text-[#0F172A]">Hospital B</h3>
               <p className="text-[11px] text-[#64748B]">Rural District Clinic</p>
             </div>
-            <span className="inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-0.5 rounded-full bg-[#F0FDF4] text-[#16A34A] border border-[#DCFCE7]">
-              ● Connected
-            </span>
+            {isNodeBOnline ? (
+              <span className="inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-0.5 rounded-full bg-[#F0FDF4] text-[#16A34A] border border-[#DCFCE7]">
+                ● Connected
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-0.5 rounded-full bg-slate-100 text-[#64748B] border border-[#E2E8F0]">
+                ○ Disconnected
+              </span>
+            )}
           </div>
 
           <div className="space-y-2 text-xs">
@@ -418,19 +462,21 @@ export default function AdminDashboard({ onNavigate }) {
             </div>
             <div className="flex justify-between">
               <span className="text-[#64748B]">Dataset:</span>
-              <span className="font-semibold text-[#0F172A]">{nodeB.dataset_size} CXRs</span>
+              <span className="font-semibold text-[#0F172A]">{nodeB.dataset_size || 120} CXRs</span>
             </div>
             <div className="flex justify-between">
-              <span className="text-[#64748B]">Training:</span>
-              <span className="font-semibold text-[#0F172A]">Idle / Ready</span>
+              <span className="text-[#64748B]">Status:</span>
+              <span className={`font-semibold ${isNodeBOnline ? 'text-[#16A34A]' : 'text-[#64748B]'}`}>
+                {isNodeBOnline ? 'Idle / Ready' : 'Node Offline'}
+              </span>
             </div>
             <div className="flex justify-between">
               <span className="text-[#64748B]">Loss:</span>
-              <span className="font-mono text-[#0F172A]">{nodeB.last_loss ?? 0.44}</span>
+              <span className="font-mono text-[#0F172A]">{nodeB.last_loss ?? '—'}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-[#64748B]">Accuracy:</span>
-              <span className="font-mono font-semibold text-[#16A34A]">{nodeB.last_acc ?? 85.9}%</span>
+              <span className="font-mono font-semibold text-[#16A34A]">{nodeB.last_acc ? `${nodeB.last_acc}%` : '—'}</span>
             </div>
             <div className="flex justify-between pt-1 border-t border-[#E2E8F0]">
               <span className="text-[#64748B]">DP-SGD:</span>

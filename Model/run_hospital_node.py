@@ -242,7 +242,8 @@ def main():
     if reg_res and reg_res.get("status") == "registered":
         print(f"[CLIENT] Authentication successful with Central Server ✓")
     else:
-        print(f"[CLIENT] Connected to Central Server registry ✓")
+        print(f"{YELLOW}[CLIENT] ⚠️ WARNING: Could not connect to Central Server at {args.api_server}!{RESET}")
+        print(f"{YELLOW}[CLIENT] Ensure Laptop 1 has uvicorn running with '--host 0.0.0.0' and port 8000 is reachable.{RESET}")
 
     # 4. Initialize Local ResNet-18 Model
     model = get_resnet18(pretrained=True, privacy_preserving=args.dp).to(device)
@@ -266,14 +267,19 @@ def main():
     # Listen loop: continuously polls or waits for Central Server to signal a round
     last_processed_round = -1
     fl_round = 1
+    failed_polls = 0
 
     try:
         while True:
             # Poll Central Server live status
             status_data = get_json(f"{args.api_server}/api/fl/live-status")
             if not status_data:
+                failed_polls += 1
+                if failed_polls % 5 == 1:
+                    print(f"{YELLOW}[CLIENT] ⚠️ Still unable to reach {args.api_server}/api/fl/live-status. Check network or server --host 0.0.0.0!{RESET}")
                 time.sleep(2.0)
                 continue
+            failed_polls = 0
 
             current_round_num = status_data.get("current_round", 1)
             stage = status_data.get("stage", "idle")
