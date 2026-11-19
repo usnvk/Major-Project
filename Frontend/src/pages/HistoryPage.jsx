@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import HistoryTable from '../components/HistoryTable';
 import { History, Download, FileSpreadsheet, X, Eye, Calendar, AlertTriangle, CheckCircle2, GitCompareArrows } from 'lucide-react';
-import { fetchPatientVisits, reviewPatientVisit } from '../services/api';
+import { fetchPatientVisits, reviewPatientVisit, getImageUrl } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 
 export default function HistoryPage({ historyData, onViewScanDetail }) {
@@ -136,7 +136,7 @@ export default function HistoryPage({ historyData, onViewScanDetail }) {
                   <div>
                     <div className="text-sm font-bold text-slate-900">{visit.visit_date}</div>
                     <div className="text-xs text-slate-500">
-                      AI: {visit.ai_prediction || 'Not recorded'} | Confidence: {visit.ai_confidence ? `${(visit.ai_confidence * 100).toFixed(1)}%` : 'N/A'}
+                      AI: <span className={visit.ai_prediction?.toLowerCase().includes('positive') ? 'text-[#DC2626] font-bold' : 'text-[#16A34A] font-bold'}>{visit.ai_prediction || 'Not recorded'}</span> | Confidence: {visit.ai_confidence ? `${(visit.ai_confidence * 100).toFixed(1)}%` : 'N/A'}
                     </div>
                   </div>
                   <span className="text-xs font-semibold rounded-full px-3 py-1 border border-slate-200 self-start">
@@ -152,9 +152,17 @@ export default function HistoryPage({ historyData, onViewScanDetail }) {
                     {visit.previous_visit ? (
                       <div className="text-xs space-y-1">
                         <div>{visit.previous_visit.visit_date}</div>
-                        <div>{visit.previous_visit.ai_prediction || 'No AI record'} — Stage {visit.previous_visit.treatment_stage || 'N/A'}</div>
+                        <div>
+                          <span className={visit.previous_visit.ai_prediction?.toLowerCase().includes('positive') ? 'text-[#DC2626] font-bold' : 'text-[#16A34A] font-bold'}>
+                            {visit.previous_visit.ai_prediction || 'No AI record'}
+                          </span>
+                          {' — Stage '}{visit.previous_visit.treatment_stage || 'N/A'}
+                        </div>
+                        {visit.previous_visit.doctor_observations && (
+                          <div className="italic text-slate-600">"{visit.previous_visit.doctor_observations}"</div>
+                        )}
                         {visit.previous_visit.heatmap_image_path && (
-                          <img src={visit.previous_visit.heatmap_image_path} alt="Previous Grad-CAM" className="mt-2 w-full max-h-48 object-contain rounded-lg border" />
+                          <img src={visit.previous_visit.heatmap_image_path.startsWith('http') ? visit.previous_visit.heatmap_image_path : `http://127.0.0.1:8000${visit.previous_visit.heatmap_image_path}`} alt="Previous Grad-CAM" className="mt-2 w-full max-h-48 object-contain rounded-lg border" />
                         )}
                       </div>
                     ) : (
@@ -165,9 +173,22 @@ export default function HistoryPage({ historyData, onViewScanDetail }) {
                     <div className="text-[11px] font-bold text-slate-500 mb-2">Current Visit</div>
                     <div className="text-xs space-y-1">
                       <div>{visit.visit_date}</div>
-                      <div>{visit.ai_prediction || 'No AI record'} — Stage {visit.treatment_stage || 'N/A'}</div>
+                      <div>
+                        <span className={visit.ai_prediction?.toLowerCase().includes('positive') ? 'text-[#DC2626] font-bold' : 'text-[#16A34A] font-bold'}>
+                          {visit.ai_prediction || 'No AI record'}
+                        </span>
+                        {' — Stage '}{visit.treatment_stage || 'N/A'}
+                      </div>
+                      {visit.doctor_observations && (
+                        <div className="italic text-slate-600">"{visit.doctor_observations}"</div>
+                      )}
+                      {visit.doctor_review_status === 'reviewed' && (
+                        <div className="text-sky-700 font-semibold">
+                          Clinician: {visit.doctor_validated_change} — {visit.doctor_name || 'Clinician'}
+                        </div>
+                      )}
                       {visit.heatmap_image_path && (
-                        <img src={visit.heatmap_image_path} alt="Current Grad-CAM" className="mt-2 w-full max-h-48 object-contain rounded-lg border" />
+                        <img src={visit.heatmap_image_path.startsWith('http') ? visit.heatmap_image_path : `http://127.0.0.1:8000${visit.heatmap_image_path}`} alt="Current Grad-CAM" className="mt-2 w-full max-h-48 object-contain rounded-lg border" />
                       )}
                     </div>
                   </div>

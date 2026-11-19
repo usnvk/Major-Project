@@ -1,8 +1,10 @@
 import axios from 'axios';
 import { getStageInformation } from '../utils/stageData';
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000';
-const ENABLE_MOCK_FALLBACK = import.meta.env.VITE_ENABLE_MOCK_FALLBACK === 'true';
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ||
+  (typeof window !== 'undefined' && window.location?.hostname && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1'
+    ? `http://${window.location.hostname}:8000`
+    : 'http://127.0.0.1:8000');
 
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
@@ -21,6 +23,17 @@ apiClient.interceptors.request.use((config) => {
   return config;
 });
 
+
+/**
+ * Resolves a relative /edge-storage/... path to an absolute backend URL for use in <img> tags.
+ * Returns null if path is falsy.
+ */
+export const getImageUrl = (path) => {
+  if (!path) return null;
+  if (path.startsWith('http://') || path.startsWith('https://') || path.startsWith('data:')) return path;
+  const cleanPath = path.startsWith('/') ? path : `/${path}`;
+  return `${API_BASE_URL}${cleanPath}`;
+};
 
 /**
  * Generates an SVG Data URL representing a high-contrast clinical chest X-ray mock with heatmap overlay
@@ -81,50 +94,28 @@ export const predictXray = async (file, patientId = null, patientName = null, up
         ...data,
         prediction: data.result,
         confidence: Number((Number(data.confidence || 0) * 100).toFixed(2)),
-        patient_hash: data.patient_hash || `PT-HASH-${Math.random().toString(16).substring(2, 8).toUpperCase()}`,
+        patient_hash: data.patient_hash || null,
         is_dicom: Boolean(data.is_dicom),
         dicom_metadata: data.dicom_metadata || null,
         bounding_boxes: data.bounding_boxes || [],
-        heatmap_url: isPositiveResult ? (data.heatmap_base64 || data.heatmap_url || null) : null,
+        heatmap_url: isPositiveResult
+          ? (data.heatmap_base64 || (data.heatmap_url ? getImageUrl(data.heatmap_url) : null))
+          : null,
+        image_url: data.image_url ? getImageUrl(data.image_url) : null,
       },
     };
   } catch (error) {
-    console.warn('Backend API connection failed. Checking fallback mode.', error?.message);
+    console.warn('Backend API connection failed.', error?.message);
 
-    if (ENABLE_MOCK_FALLBACK) {
-      await new Promise((resolve) => setTimeout(resolve, 1200));
-      const isPositive = false;
-      const confidence = 100;
-      const stage = null;
-      const predictionId = `pred_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
-      const isDcm = file ? file.name.toLowerCase().endsWith('.dcm') : false;
-
-      return {
-        success: true,
-        isMock: true,
-        data: {
-          prediction_id: predictionId,
-          patient_hash: `PT-HASH-${Math.random().toString(16).substring(2, 10).toUpperCase()}`,
-          is_dicom: isDcm,
-          dicom_metadata: isDcm ? { modality: 'DX', body_part_examined: 'CHEST', view_position: 'PA', phi_sanitized: true } : null,
-          prediction: isPositive ? 'TB Positive' : 'TB Negative',
-          confidence: confidence,
-          stage: stage,
-          heatmap_url: isPositive ? generateHeatmapSvgDataUrl(true) : null,
-          bounding_boxes: isPositive ? [{ x: 120, y: 95, width: 60, height: 75, relative_area: 0.089 }] : [],
-          stage_info: stage ? getStageInformation(stage) : null,
-          created_at: new Date().toISOString(),
-        },
-      };
-    }
+    const errorMessage =
+      error.response?.data?.detail?.message ||
+      error.response?.data?.detail ||
+      error.response?.data?.message ||
+      'Unable to connect to AI prediction service. Please verify backend is running.';
 
     return {
       success: false,
-      error:
-        error.response?.data?.detail?.message ||
-        error.response?.data?.detail ||
-        error.response?.data?.message ||
-        'Unable to connect to AI prediction service. Please verify backend is running.',
+      error: typeof errorMessage === 'string' ? errorMessage : JSON.stringify(errorMessage),
     };
   }
 };
@@ -159,23 +150,7 @@ export const submitFeedback = async (
       data: response.data,
     };
   } catch (error) {
-    console.warn('Feedback API call failed. Checking fallback mode.', error?.message);
-
-    if (ENABLE_MOCK_FALLBACK) {
-      await new Promise((resolve) => setTimeout(resolve, 600));
-
-      return {
-        success: true,
-        isMock: true,
-        data: {
-          status: 'success',
-          message: 'Doctor override queued for Federated Retraining.',
-          prediction_id: predictionId,
-          true_label: trueLabel,
-          confirmed_at: new Date().toISOString(),
-        },
-      };
-    }
+    console.warn('Feedback API call failed.', error?.message);
 
     return {
       success: false,
@@ -485,13 +460,14 @@ export const fetchAdminSystemStats = async () => {
  * ---------------------------------------------------------------------------
  */
 
-export const startFLRound = async ({ aggregation = 'FedAvg', demo = true, dp = true, simulate = false }) => {
+export const startFLRound = async ({ aggregation = 'FedAvg', demo = true, dp = true, simulate = false, rounds = 1 }) => {
   try {
     const response = await apiClient.post('/api/fl/round/start', {
       aggregation,
       demo,
       dp,
       simulate,
+      rounds,
     });
     return { success: true, data: response.data };
   } catch (error) {
@@ -499,6 +475,15 @@ export const startFLRound = async ({ aggregation = 'FedAvg', demo = true, dp = t
       success: false,
       error: error.response?.data?.detail || error.message || 'Failed to start FL round',
     };
+  }
+};
+
+export const fetchFLClusterInfo = async () => {
+  try {
+    const response = await apiClient.get('/api/fl/cluster/info');
+    return { success: true, data: response.data };
+  } catch (error) {
+    return { success: false, error: error.response?.data?.detail || error.message };
   }
 };
 

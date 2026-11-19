@@ -63,7 +63,7 @@ export default function LoginPage() {
 
     try {
       const generatedPatientHash = regRole === 'patient' 
-        ? (regPatientHash.trim() || `PT-${Math.floor(1000 + Math.random() * 9000)}`) 
+        ? (regPatientHash.trim() || `PT-${regEmail.replace(/[^a-zA-Z0-9]/g, '').substring(0, 6).toUpperCase() || 'USER'}`) 
         : null;
 
       const res = await register({
@@ -293,6 +293,7 @@ export default function LoginPage() {
                   >
                     <option value="doctor">Doctor (Clinical Review)</option>
                     <option value="patient">Patient (Health Portal)</option>
+                    <option value="hospital">Hospital Node (Federated Client)</option>
                   </select>
                 </div>
               </div>

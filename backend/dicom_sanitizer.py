@@ -86,14 +86,27 @@ def derive_patient_hash(raw_patient_id: str, salt: str = SECRET_SALT) -> str:
 
 
 def is_dicom_file(contents: bytes) -> bool:
-    """Checks if raw bytes represent a DICOM stream (contains 'DICM' preamble or valid tags)."""
-    if len(contents) > 132 and contents[128:132] == b"DICM":
+    """Checks if raw bytes represent a genuine DICOM stream (contains 'DICM' preamble or valid DICOM header)."""
+    if not contents or len(contents) < 132:
+        return False
+    # Standard DICOM has 'DICM' magic bytes at byte offset 128
+    if contents[128:132] == b"DICM":
         return True
+    # Standard image formats (JPEG, PNG, WebP, GIF, BMP) are never DICOM streams
+    if (
+        contents.startswith(b"\xff\xd8\xff")
+        or contents.startswith(b"\x89PNG")
+        or (contents.startswith(b"RIFF") and b"WEBP" in contents[:16])
+        or contents.startswith(b"GIF8")
+        or contents.startswith(b"BM")
+    ):
+        return False
+    # Only test headerless DICOM if it wasn't a standard image format
     if PYDICOM_AVAILABLE:
         try:
             bio = io.BytesIO(contents)
-            pydicom.dcmread(bio, stop_before_pixels=True, force=True)
-            return True
+            dcm = pydicom.dcmread(bio, stop_before_pixels=True, force=False)
+            return bool(dcm)
         except Exception:
             return False
     return False
@@ -285,18 +298,35 @@ def create_synthetic_dicom_file(
     file_path.parent.mkdir(parents=True, exist_ok=True)
 
     size = 256
-    y, x = np.ogrid[:size, :size]
-    center = size // 2
-    mask_left = ((x - (center - 45)) ** 2) / 35**2 + ((y - center) ** 2) / 75**2 <= 1
-    mask_right = ((x - (center + 45)) ** 2) / 35**2 + ((y - center) ** 2) / 75**2 <= 1
+    real_cxr_path = None
+    model_dataset = Path(__file__).resolve().parent.parent / "Model" / "dataset"
+    for candidate in [
+        model_dataset / "node_A" / "test" / "Normal" / "others (1).jpg",
+        model_dataset / "node_B" / "test" / "Normal" / "Normal-1.png",
+        model_dataset / "node_C" / "test" / "Normal" / "h0001.png",
+    ]:
+        if candidate.is_file():
+            real_cxr_path = candidate
+            break
 
-    img = np.full((size, size), 30, dtype=np.uint16)
-    img[mask_left] = 160
-    img[mask_right] = 160
+    if real_cxr_path:
+        real_cxr = Image.open(real_cxr_path).convert("L").resize((size, size))
+        img = (np.array(real_cxr, dtype=np.uint16) * 16).astype(np.uint16)
+    else:
+        y, x = np.ogrid[:size, :size]
+        center = size // 2
+        mask_left = ((x - (center - 45)) ** 2) / 35**2 + ((y - center) ** 2) / 75**2 <= 1
+        mask_right = ((x - (center + 45)) ** 2) / 35**2 + ((y - center) ** 2) / 75**2 <= 1
+
+        img = np.full((size, size), 30, dtype=np.uint16)
+        img[mask_left] = 160
+        img[mask_right] = 160
 
     if is_positive:
+        y, x = np.ogrid[:size, :size]
+        center = size // 2
         lesion = ((x - (center + 40)) ** 2) + ((y - (center - 35)) ** 2) <= 15**2
-        img[lesion] = 230
+        img[lesion] = min(4000, int(img[lesion].max()) + 1500)
 
     if PYDICOM_AVAILABLE:
         file_meta = FileMetaDataset()

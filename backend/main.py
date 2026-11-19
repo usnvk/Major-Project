@@ -1,6 +1,9 @@
+import base64
+import hashlib
 import io
 import json
 import os
+import socket
 import sys
 import time
 import uuid
@@ -15,6 +18,9 @@ if str(_BACKEND_DIR) not in sys.path:
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+import torch
 from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, Field, field_validator
 
@@ -99,10 +105,39 @@ BACKEND_DIR = Path(__file__).resolve().parent
 STAGES_PATH = BACKEND_DIR / "stages.json"
 MODELS_DIR = BACKEND_DIR / "models"
 MODELS_DIR.mkdir(parents=True, exist_ok=True)
+MODEL_DIR = BACKEND_DIR.parent / "Model"
+CHECKPOINTS_DIR = MODEL_DIR / "checkpoints"
+CHECKPOINTS_DIR.mkdir(parents=True, exist_ok=True)
 
-MODEL_PATH = Path(
-    os.getenv("MODEL_PATH", str(MODELS_DIR / "tb_public.pth"))
-)
+
+def _get_local_ip() -> str:
+    """Discovers the active Wi-Fi / LAN IP address for multi-laptop communication."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "127.0.0.1"
+
+
+def _resolve_model_path() -> Path:
+    env_path = os.getenv("MODEL_PATH")
+    if env_path and Path(env_path).is_file():
+        return Path(env_path)
+    for candidate in [
+        MODELS_DIR / "federated_model.pth",
+        MODELS_DIR / "centralized_model.pth",
+        MODELS_DIR / "tb_public.onnx",
+        MODELS_DIR / "tb_public.pth",
+    ]:
+        if candidate.is_file():
+            return candidate
+    return MODELS_DIR / "federated_model.pth"
+
+
+MODEL_PATH = _resolve_model_path()
 VALIDATOR_MODEL_PATH = Path(
     os.getenv("VALIDATOR_MODEL_PATH", str(MODELS_DIR / "chest_xray_validator.pth"))
 )
@@ -134,6 +169,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.mount("/edge-storage", StaticFiles(directory=str(EDGE_STORAGE_DIR)), name="edge_storage")
 _inference: ChestXRayInference | None = None
 
 
@@ -165,6 +201,7 @@ class FLRoundStartInput(BaseModel):
     demo: bool = True
     dp: bool = True
     simulate: bool = False
+    rounds: int = 1
 
 
 class FLHeartbeatInput(BaseModel):
@@ -280,15 +317,22 @@ def get_stage_from_confidence(confidence: float) -> int:
 
 def _load_inference() -> ChestXRayInference:
     global _inference
-    if _inference is None:
+    resolved_path = _resolve_model_path()
+    if _inference is None or _inference.tb_model_path != resolved_path:
         _inference = ChestXRayInference(
-            MODEL_PATH,
+            resolved_path,
             VALIDATOR_MODEL_PATH,
             VALIDATOR_THRESHOLD,
         )
     else:
         _inference.validator_threshold = VALIDATOR_THRESHOLD
     return _inference
+
+
+def reload_inference() -> ChestXRayInference:
+    global _inference
+    _inference = None
+    return _load_inference()
 
 
 async def _read_image(file: UploadFile) -> tuple[Image.Image, bool, str, dict[str, Any] | None, str | None]:
@@ -312,6 +356,13 @@ async def _read_image(file: UploadFile) -> tuple[Image.Image, bool, str, dict[st
     if is_dcm:
         try:
             sanitized = sanitize_dicom_bytes(contents, edge_storage_dir=EDGE_STORAGE_DIR)
+            meta = sanitized.get("anonymized_metadata") or {}
+            body_part = str(meta.get("body_part_examined") or "").upper().strip()
+            if body_part and body_part not in {"CHEST", "THORAX", "LUNG", "LUNGS", "RIBS", "CLAVICLE", "UNKNOWN", ""}:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Image rejected: Non-chest scan detected (Body Part: '{body_part}'). PulmoScan accepts only Chest Radiographs (CXR).",
+                )
             return (
                 sanitized["image"],
                 True,
@@ -319,6 +370,8 @@ async def _read_image(file: UploadFile) -> tuple[Image.Image, bool, str, dict[st
                 sanitized["anonymized_metadata"],
                 sanitized["saved_dicom_path"],
             )
+        except HTTPException:
+            raise
         except Exception as err:
             raise HTTPException(
                 status_code=422,
@@ -461,7 +514,15 @@ def register_hospital(data: HospitalCreateInput, role: str = "admin") -> dict[st
 def list_hospitals(role: str = "admin") -> list[dict[str, Any]]:
     if role not in {"admin", "doctor", "hospital"}:
         raise HTTPException(status_code=403, detail="Insufficient role.")
-    return get_hospitals()
+    hospitals = get_hospitals()
+    node_map = fl_orchestrator.nodes
+    for h in hospitals:
+        nid = h.get("node_id")
+        if nid and nid in node_map:
+            h["status"] = node_map[nid].get("status", "offline")
+            if "dataset_size" in node_map[nid]:
+                h["dataset_size"] = node_map[nid]["dataset_size"]
+    return hospitals
 
 
 @app.get("/users")
@@ -546,10 +607,32 @@ def list_patient_visits(patient_hash: str, role: str = "doctor", viewer_patient_
     if role == "patient" and viewer_patient_hash != patient_hash:
         raise HTTPException(status_code=403, detail="You cannot access another patient's visit timeline.")
     visits = get_patient_visits(patient_hash)
+
+    def _normalize_path(path: str | None) -> str | None:
+        """Convert an absolute filesystem path to a /edge-storage/... web URL."""
+        if not path:
+            return None
+        p = Path(path)
+        try:
+            rel = p.relative_to(EDGE_STORAGE_DIR)
+            return f"/edge-storage/{rel.as_posix()}"
+        except ValueError:
+            # Already a web URL or unrecognized path — return as-is
+            return path
+
     comparison = []
     for index, visit in enumerate(visits):
         item = dict(visit)
-        item["previous_visit"] = visits[index - 1] if index > 0 else None
+        item["xray_image_path"] = _normalize_path(item.get("xray_image_path"))
+        item["heatmap_image_path"] = _normalize_path(item.get("heatmap_image_path"))
+        prev = visits[index - 1] if index > 0 else None
+        if prev:
+            prev_item = dict(prev)
+            prev_item["xray_image_path"] = _normalize_path(prev_item.get("xray_image_path"))
+            prev_item["heatmap_image_path"] = _normalize_path(prev_item.get("heatmap_image_path"))
+            item["previous_visit"] = prev_item
+        else:
+            item["previous_visit"] = None
         comparison.append(item)
     return comparison
 
@@ -629,6 +712,15 @@ async def predict(
             status_code=503, detail=f"Prediction unavailable: {error}"
         ) from error
 
+    if inference_result.get("status") == "REJECTED":
+        raise HTTPException(
+            status_code=422,
+            detail=inference_result.get(
+                "rejection_reason",
+                "Image rejected: Not a valid Chest X-Ray. PulmoScan accepts only Chest Radiographs (CXR).",
+            ),
+        )
+
     confidence = float(inference_result["confidence"])
     is_positive = inference_result["label"] == "Tuberculosis"
     stage = get_stage_from_confidence(confidence) if is_positive else 0
@@ -699,6 +791,9 @@ async def predict(
         details=f"Inference: {result} ({round(confidence*100, 1)}%) - Patient: {final_patient_name or final_patient_hash}",
     )
 
+    image_url = f"/edge-storage/inferences/{prediction_id}.png"
+    heatmap_url_web = f"/edge-storage/inferences/{prediction_id}_heatmap.png" if heatmap_path else None
+
     return {
         "prediction_id": prediction_id,
         "patient_hash": final_patient_hash,
@@ -712,6 +807,8 @@ async def predict(
         "validator_probability": inference_result["validator_probability"],
         "model_class": inference_result["label"],
         "heatmap_base64": inference_result.get("heatmap_base64") if is_positive else None,
+        "heatmap_url": heatmap_url_web,
+        "image_url": image_url,
         "bounding_boxes": inference_result.get("bounding_boxes", []),
         "disclaimer": "Clinical AI decision support tool. Attending physician confirmation required.",
     }
@@ -1017,6 +1114,7 @@ def start_fl_round(payload: FLRoundStartInput):
         demo=payload.demo,
         dp=payload.dp,
         simulate=payload.simulate,
+        rounds=payload.rounds,
     )
     if res.get("status") == "error":
         raise HTTPException(status_code=400, detail=res.get("message"))
@@ -1099,6 +1197,65 @@ def get_fl_current_model():
         "validation_loss": fl_orchestrator.validation_loss,
         "checkpoint": f"federated_model_{fl_orchestrator.global_version}.pth",
         "checkpoint_path": fl_orchestrator.global_checkpoint_path,
+    }
+
+
+@app.get("/api/fl/model/download")
+def download_fl_global_model(version: str | None = None):
+    """Allows hospital client nodes (Laptop 2 / Laptop 3) to download the latest global model over Wi-Fi."""
+    if version:
+        target_path = CHECKPOINTS_DIR / f"federated_model_{version}.pth"
+    else:
+        target_path = MODELS_DIR / "federated_model.pth"
+        if not target_path.is_file():
+            target_path = MODEL_DIR / "models" / "federated_model.pth"
+    if not target_path.is_file():
+        raise HTTPException(status_code=404, detail=f"Model checkpoint not found: {target_path}")
+    return FileResponse(
+        path=str(target_path),
+        filename=target_path.name,
+        media_type="application/octet-stream",
+    )
+
+
+@app.get("/api/fl/model/weights")
+def get_fl_global_model_weights(version: str | None = None):
+    """Returns base64-encoded PyTorch state dict of the active global model for client synchronization."""
+    if version:
+        target_path = CHECKPOINTS_DIR / f"federated_model_{version}.pth"
+    else:
+        target_path = MODELS_DIR / "federated_model.pth"
+        if not target_path.is_file():
+            target_path = MODEL_DIR / "models" / "federated_model.pth"
+    if not target_path.is_file():
+        raise HTTPException(status_code=404, detail=f"Model checkpoint not found: {target_path}")
+    loaded = torch.load(target_path, map_location="cpu", weights_only=True)
+    state_dict = loaded.get("model_state_dict", loaded) if isinstance(loaded, dict) else loaded
+    buf = io.BytesIO()
+    torch.save(state_dict, buf)
+    encoded = base64.b64encode(buf.getvalue()).decode("ascii")
+    return {
+        "version": fl_orchestrator.global_version,
+        "round": fl_orchestrator.current_round,
+        "weights_hash": hashlib.sha256(buf.getvalue()).hexdigest()[:16],
+        "parameters_base64": encoded,
+    }
+
+
+@app.get("/api/fl/cluster/info")
+def get_fl_cluster_info():
+    """Returns cluster network configuration and connection instructions for client laptops."""
+    server_ip = _get_local_ip()
+    return {
+        "server_ip": server_ip,
+        "rest_api_url": f"http://{server_ip}:8000",
+        "frontend_url": f"http://{server_ip}:5173",
+        "active_global_version": fl_orchestrator.global_version,
+        "current_round": fl_orchestrator.current_round,
+        "commands": {
+            "hospital_A": f"python Model/run_hospital_node.py --node_id node_A --api_server http://{server_ip}:8000",
+            "hospital_B": f"python Model/run_hospital_node.py --node_id node_B --api_server http://{server_ip}:8000",
+        },
     }
 
 

@@ -182,7 +182,10 @@ def load_hospital_dataset(path_input: Optional[str], default_dir: Path, tfms) ->
             ds = datasets.ImageFolder(str(target_path), transform=tfms)
             for sdir in subdirs:
                 c = len([f for f in sdir.glob("*") if f.suffix.lower() in valid_exts])
-                if any(k in sdir.name.lower() for k in ["pos", "tb", "tuberculosis", "sick"]):
+                sname = sdir.name.lower()
+                if any(k in sname for k in ["neg", "normal", "healthy", "negative"]):
+                    neg_count += c
+                elif any(k in sname for k in ["pos", "tb", "tuberculosis", "sick", "positive"]):
                     pos_count += c
                 else:
                     neg_count += c
@@ -200,10 +203,10 @@ def load_hospital_dataset(path_input: Optional[str], default_dir: Path, tfms) ->
             labeled_files = []
             for f in image_files:
                 fl = f.name.lower()
-                if any(k in fl for k in ["pos", "tb", "tuberculosis", "positive"]):
-                    labeled_files.append((f, 1))
-                elif any(k in fl for k in ["neg", "normal", "healthy", "negative"]):
+                if any(k in fl for k in ["neg", "normal", "healthy", "negative"]):
                     labeled_files.append((f, 0))
+                elif any(k in fl for k in ["pos", "tb", "tuberculosis", "positive"]):
+                    labeled_files.append((f, 1))
             if not labeled_files:
                 print(
                     f"\n{YELLOW}[DATA] No labeled filenames found. "
@@ -468,9 +471,38 @@ def main():
 
                 print(f"\n" + "-" * 58)
                 print(f"{BOLD}[FL] Round #{current_round_num} started across cluster{RESET}")
-                print(f"[MODEL] Receiving Global Model {global_version} parameters from Central Server...")
-                time.sleep(0.8)
-                print(f"[MODEL] Global model {global_version} weights loaded into local ResNet-18 ✓")
+                print(f"[MODEL] Synchronizing Global Model {global_version} weights from Central Server ({args.api_server})...")
+
+                downloaded_weights = False
+                try:
+                    weights_resp = get_json(f"{args.api_server}/api/fl/model/weights?version={global_version}", timeout=15.0)
+                    if not weights_resp or "parameters_base64" not in weights_resp:
+                        weights_resp = get_json(f"{args.api_server}/api/fl/model/weights", timeout=15.0)
+                    if weights_resp and "parameters_base64" in weights_resp:
+                        raw_bytes = base64.b64decode(weights_resp["parameters_base64"])
+                        remote_state = torch.load(io.BytesIO(raw_bytes), map_location=device, weights_only=True)
+                        state_dict = remote_state.get("model_state_dict", remote_state) if isinstance(remote_state, dict) else remote_state
+                        model.load_state_dict(state_dict, strict=False)
+                        chk_hash = weights_resp.get("weights_hash", hashlib.sha256(raw_bytes).hexdigest()[:16])
+                        print(f"{GREEN}[MODEL] Global Model {global_version} synchronized via JSON payload (SHA256:{chk_hash}) ✓{RESET}")
+                        downloaded_weights = True
+                except Exception as dl_err:
+                    print(f"{YELLOW}[MODEL] JSON weight fetch note: {dl_err}. Trying binary download...{RESET}")
+
+                if not downloaded_weights:
+                    try:
+                        req = urllib.request.Request(f"{args.api_server}/api/fl/model/download")
+                        with urllib.request.urlopen(req, timeout=15.0) as resp:
+                            raw_bytes = resp.read()
+                        remote_state = torch.load(io.BytesIO(raw_bytes), map_location=device, weights_only=True)
+                        state_dict = remote_state.get("model_state_dict", remote_state) if isinstance(remote_state, dict) else remote_state
+                        model.load_state_dict(state_dict, strict=False)
+                        print(f"{GREEN}[MODEL] Global Model {global_version} synchronized via binary stream ✓{RESET}")
+                        downloaded_weights = True
+                    except Exception as b_err:
+                        print(f"{YELLOW}[MODEL] Binary download notice: {b_err}. Continuing with local model.{RESET}")
+
+                heartbeat_daemon.model_version = global_version
 
                 # Notify central server of local training start
                 post_json(
@@ -486,8 +518,8 @@ def main():
                 print(f"\n[TRAINING] Beginning local PyTorch training on {active_size} radiographs ({data_holder['path']})...")
 
                 # Batch parameters
-                batch_limit = 4 if args.demo else min(20, max(5, active_size // args.batch_size))
-                batch_delay = 1.5 if args.demo else 0.4
+                batch_limit = 4 if args.demo else min(40, max(5, active_size // args.batch_size))
+                batch_delay = 1.0 if args.demo else 0.05
 
                 model.train()
                 running_loss = 0.0
@@ -623,6 +655,7 @@ def main():
 
                 print(f"[UPLOAD] Central Server accepted weight vector ✓")
                 next_version = f"v{current_round_num + 1}"
+                heartbeat_daemon.model_version = next_version
                 print(f"\n[FL] Waiting for Central Server to execute FedAvg aggregation and distribute Global Model {next_version}...")
 
                 # Wait for round to finalize at server

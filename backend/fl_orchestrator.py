@@ -64,6 +64,9 @@ class FederatedOrchestrator:
         self.aggregation_method = "FedAvg"
         self.is_simulation = False
         self.demo_mode = True
+        self.target_rounds = 1
+        self.rounds_completed_in_session = 0
+        self.dp_enabled = True
 
         # Global Model Versioning (Section 8)
         self.global_version = "v1"
@@ -187,6 +190,7 @@ class FederatedOrchestrator:
         demo: bool = False,
         dp: bool = False,
         simulate: bool = False,
+        rounds: int = 1,
     ) -> Dict[str, Any]:
         """Initiates a real Federated Learning round only with live hospital nodes."""
         with self.lock:
@@ -216,6 +220,8 @@ class FederatedOrchestrator:
             self.is_active = True
             self.aggregation_method = aggregation
             self.demo_mode = demo
+            self.dp_enabled = dp
+            self.target_rounds = max(1, rounds)
             self.is_simulation = simulate
             self.round_updates = {}
             self.stage = "broadcasting"
@@ -381,10 +387,12 @@ class FederatedOrchestrator:
                 shapes = {tuple(tensor.shape) for tensor in tensors}
                 if len(shapes) != 1:
                     return {"status": "error", "message": f"Tensor shape mismatch for {key}."}
-                aggregated[key] = sum(
-                    tensor * (sample_count / total_samples)
+                orig_dtype = tensors[0].dtype
+                weighted = sum(
+                    tensor.float() * (sample_count / total_samples)
                     for (sample_count, _), tensor in zip(updates, tensors)
                 )
+                aggregated[key] = weighted.to(orig_dtype)
         except Exception as error:
             return {"status": "error", "message": f"FedAvg failed: {error}"}
 
@@ -407,6 +415,20 @@ class FederatedOrchestrator:
 
         active_model = MODEL_DIR / "models" / "federated_model.pth"
         torch.save(aggregated, str(active_model))
+
+        # Also save to backend/models so the FastAPI inference engine picks it up immediately
+        backend_model = BACKEND_DIR / "models" / "federated_model.pth"
+        backend_model.parent.mkdir(parents=True, exist_ok=True)
+        torch.save(aggregated, str(backend_model))
+
+        # Reload the FastAPI inference engine with the new aggregated model
+        try:
+            import importlib
+            _main_mod = importlib.import_module("main") if "main" in sys.modules else None
+            if _main_mod and hasattr(_main_mod, "reload_inference"):
+                _main_mod.reload_inference()
+        except Exception as _reload_err:
+            print(f"[FL] Inference reload skipped: {_reload_err}")
 
         weighted_loss = sum(
             update["loss"] * update["num_samples"]
@@ -465,6 +487,22 @@ class FederatedOrchestrator:
         with self.lock:
             self.round_updates = {}
             self.current_round += 1
+            self.rounds_completed_in_session += 1
+            remaining_rounds = self.target_rounds - self.rounds_completed_in_session
+            should_launch_next = remaining_rounds > 0
+
+        if should_launch_next:
+            print(f"\n[ORCHESTRATOR] 🚀 Launching next federated round #{self.current_round} across cluster with Global Model {new_version}...")
+            def _launch_next_round():
+                time.sleep(3.5)
+                self.start_round(
+                    aggregation=self.aggregation_method,
+                    demo=self.demo_mode,
+                    dp=self.dp_enabled,
+                    simulate=False,
+                    rounds=self.target_rounds,
+                )
+            threading.Thread(target=_launch_next_round, daemon=True).start()
 
         return {
             "version": new_version,

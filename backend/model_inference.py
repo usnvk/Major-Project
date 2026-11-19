@@ -276,6 +276,7 @@ class ChestXRayInference:
         self.validator_model_path = Path(validator_model_path)
         self.validator_threshold = validator_threshold
         self._tb_model: nn.Module | None = None
+        self._model_type: str = "unknown"
         self._tb_session = None
         self._tb_input_name: str | None = None
         self._validator_model: nn.Module | None = None
@@ -296,6 +297,7 @@ class ChestXRayInference:
                     providers=["CPUExecutionProvider"],
                 )
                 self._tb_input_name = self._tb_session.get_inputs()[0].name
+                self._model_type = "onnx"
         elif self.tb_model_path.suffix.lower() == ".pth":
             if self._tb_model is None:
                 if not self.tb_model_path.is_file():
@@ -312,18 +314,36 @@ class ChestXRayInference:
                     if isinstance(checkpoint, dict)
                     else checkpoint
                 )
-                model = PublicTBDenseNet()
-                compatible = {}
-                for key, value in state_dict.items():
-                    if key.startswith("backbone.features."):
-                        compatible[key] = value
-                    elif key.startswith("backbone.classifier.1."):
-                        compatible[key] = value
-                model.load_state_dict(compatible, strict=False)
-                model.eval()
-                self._tb_model = model
+                is_densenet = any(
+                    "denseblock" in k or "features.denseblock" in k or "features.norm5" in k
+                    for k in state_dict.keys()
+                )
+                if is_densenet:
+                    model = PublicTBDenseNet()
+                    compatible = {}
+                    for key, value in state_dict.items():
+                        if key.startswith("backbone."):
+                            compatible[key] = value
+                        elif key.startswith("features."):
+                            compatible[f"backbone.{key}"] = value
+                        elif key.startswith("classifier."):
+                            compatible[f"backbone.{key}"] = value
+                        else:
+                            compatible[key] = value
+                    model.load_state_dict(compatible, strict=False)
+                    model.eval()
+                    self._tb_model = model
+                    self._model_type = "densenet"
+                else:
+                    # Native ResNet-18 checkpoint
+                    model = _resnet18()
+                    model.load_state_dict(state_dict)
+                    model.eval()
+                    self._tb_model = model
+                    self._model_type = "resnet18"
         elif self._tb_model is None:
             self._tb_model = _load_state_dict(self.tb_model_path, is_validator=False)
+            self._model_type = "resnet18"
         if self._validator_model is None:
             self._validator_model = _load_state_dict(
                 self.validator_model_path, is_validator=True
@@ -335,11 +355,23 @@ class ChestXRayInference:
         tensor = self._transform(rgb_image).unsqueeze(0)
         assert self._validator_model is not None
 
-        # Domain information is advisory only. Black/white/noise uploads must
-        # receive a TB screening result rather than a document rejection.
+        # ── 1. Chest X-Ray Pre-Validation & OOD Gatekeeper Check ──────
         with torch.inference_mode():
             validator_probs = functional.softmax(self._validator_model(tensor), dim=1)[0]
             validator_probability = float(validator_probs[1].item())
+
+        if validator_probability < self.validator_threshold:
+            return {
+                "status": "REJECTED",
+                "validator_probability": round(validator_probability, 4),
+                "validator_threshold": self.validator_threshold,
+                "rejection_reason": "Image rejected: Not a valid Chest X-Ray. PulmoScan accepts only Chest Radiographs (CXR).",
+                "class_id": 0,
+                "label": "Invalid Image",
+                "confidence": round(1.0 - validator_probability, 4),
+                "heatmap_base64": None,
+                "bounding_boxes": [],
+            }
 
         # ── 2. TB classification + Grad-CAM++ explainability ─────────
         if self._tb_session is not None:
@@ -362,7 +394,7 @@ class ChestXRayInference:
             logits = self._tb_model(tensor)
             probs = functional.softmax(logits, dim=1)[0]
             tb_probability = float(probs[1].item())
-            if isinstance(self._tb_model, PublicTBDenseNet):
+            if self._model_type == "densenet" or isinstance(self._tb_model, PublicTBDenseNet):
                 class_id = 1 if tb_probability >= self.tb_threshold else 0
                 confidence = tb_probability if class_id == 1 else float(probs[0].item())
                 if class_id == 1:
@@ -379,8 +411,17 @@ class ChestXRayInference:
             else:
                 class_id = int(torch.argmax(probs).item())
                 confidence = float(probs[class_id].item())
-                heatmap_base64 = None
-                bounding_boxes = []
+                if class_id == 1:
+                    extractor = GradCAMPlusPlusExtractor(self._tb_model)
+                    try:
+                        cam = extractor.generate(tensor, class_id, image)
+                        heatmap_base64 = cam["heatmap_base64"]
+                        bounding_boxes = cam["bounding_boxes"]
+                    finally:
+                        extractor.remove_hooks()
+                else:
+                    heatmap_base64 = None
+                    bounding_boxes = []
 
         return {
             "status": "ACCEPTED",

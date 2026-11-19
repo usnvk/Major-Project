@@ -270,7 +270,7 @@ export default function AdminDashboard({ onNavigate }) {
             <span>Ready</span>
           </div>
           <div className="text-xs text-[#64748B] mt-1">
-            Validation: <span className="font-medium text-[#16A34A]">{flStatus?.validation_accuracy ?? 86.8}%</span>
+            Validation: <span className="font-medium text-[#16A34A]">{flStatus?.validation_accuracy != null ? `${flStatus.validation_accuracy}%` : '—'}</span>
           </div>
         </div>
       </div>

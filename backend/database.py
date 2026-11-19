@@ -6,6 +6,7 @@ from typing import Any
 
 
 DATABASE_PATH = Path(__file__).resolve().parent / "feedback.db"
+EDGE_STORAGE_DIR = Path(__file__).resolve().parent / "edge_storage"
 
 
 def get_connection() -> sqlite3.Connection:
@@ -416,6 +417,13 @@ def review_patient_visit(
         ).fetchone()
     if row is None:
         raise KeyError("Visit not found")
+    log_audit_event(
+        user_email=doctor_email,
+        user_role="doctor",
+        action="VISIT_REVIEWED",
+        resource_id=visit_id,
+        details=f"Doctor validated change: {doctor_validated_change}. Stage: {treatment_stage or 'N/A'}. Attending: {doctor_name}",
+    )
     return dict(row)
 
 
@@ -871,6 +879,13 @@ def get_scans_by_role(role: str, patient_hash: str | None = None, limit: int = 1
         doc_stage = r["confirmed_stage"] if r["confirmed_stage"] is not None else r["stage"]
         notes = r["doctor_notes"] or ("Awaiting clinician diagnosis sign-off." if not is_confirmed else ("Verified normal lung fields." if not is_pos else "Clinical review complete. Follow attending care roadmap."))
 
+        pred_id = r["prediction_id"]
+        heatmap_file = EDGE_STORAGE_DIR / "inferences" / f"{pred_id}_heatmap.png"
+        heatmap_url = f"/edge-storage/inferences/{pred_id}_heatmap.png" if heatmap_file.exists() else None
+
+        img_file = EDGE_STORAGE_DIR / "inferences" / f"{pred_id}.png"
+        image_url = f"/edge-storage/inferences/{pred_id}.png" if img_file.exists() else r["image_path"]
+
         results.append({
             "id": r["prediction_id"],
             "predictionId": r["prediction_id"],
@@ -896,8 +911,12 @@ def get_scans_by_role(role: str, patient_hash: str | None = None, limit: int = 1
             "doctor_notes": notes,
             "doctorEmail": r["doctor_email"],
             "doctorName": r["doctor_name"],
-            "imagePath": r["image_path"],
-            "image_path": r["image_path"],
+            "imagePath": image_url,
+            "image_path": image_url,
+            "imageUrl": image_url,
+            "image_url": image_url,
+            "heatmapUrl": heatmap_url,
+            "heatmap_url": heatmap_url,
         })
 
     return results
@@ -917,6 +936,29 @@ def seed_default_users_and_scans() -> None:
         # 3. Ensure the single Administrative Account exists
         admin_row = connection.execute("SELECT id FROM users WHERE role = 'admin'").fetchone()
 
+        # 4. Ensure default hospitals exist
+        hosp_a = connection.execute("SELECT 1 FROM hospitals WHERE hospital_id = 'hosp_A' OR node_id = 'node_A'").fetchone()
+        if not hosp_a:
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO hospitals
+                (hospital_id, name, address, contact_email, phone, node_id, status, created_at)
+                VALUES ('hosp_A', 'Hospital A (Urban Referral Center)', 'Metro District 1', 'admin@hospital-a.org', '+1-555-0101', 'node_A', 'offline', ?)
+                """,
+                (datetime.now(timezone.utc).isoformat(),),
+            )
+        hosp_b = connection.execute("SELECT 1 FROM hospitals WHERE hospital_id = 'hosp_B' OR node_id = 'node_B'").fetchone()
+        if not hosp_b:
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO hospitals
+                (hospital_id, name, address, contact_email, phone, node_id, status, created_at)
+                VALUES ('hosp_B', 'Hospital B (Rural District Clinic)', 'Rural Outreach Zone 4', 'contact@hospital-b.org', '+1-555-0102', 'node_B', 'offline', ?)
+                """,
+                (datetime.now(timezone.utc).isoformat(),),
+            )
+        hosp_user = connection.execute("SELECT id FROM users WHERE role = 'hospital'").fetchone()
+
     # create_user() and log_audit_event() open their own connections. Keep this
     # outside the seed connection's transaction to avoid SQLite database locks.
     if not admin_row:
@@ -933,4 +975,12 @@ def seed_default_users_and_scans() -> None:
             "SYSTEM_INITIALIZED",
             "system",
             "Default Admin account initialized with AdminPass123!.",
+        )
+    if not hosp_user:
+        create_user(
+            email="hospital_a@pulmoscan.org",
+            password="HospitalPass123!",
+            name="Hospital A Edge Operator",
+            role="hospital",
+            hospital_node="node_A",
         )

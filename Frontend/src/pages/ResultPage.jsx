@@ -44,12 +44,12 @@ export default function ResultPage({ currentResult, onBackToUpload, onSaveToHist
 
   const {
     prediction,
-    confidence = 94.2,
-    stage = 2,
+    confidence = 0,
+    stage = null,
     heatmap_url,
     originalImage,
     prediction_id,
-    patient_hash = 'PT-1001',
+    patient_hash = 'PT-UNKNOWN',
     is_dicom,
     dicom_metadata,
   } = currentResult;
@@ -162,8 +162,8 @@ export default function ResultPage({ currentResult, onBackToUpload, onSaveToHist
         </div>
         <div>
           <span className="text-[#64748B] text-[11px] block">Clinical Priority</span>
-          <span className="font-semibold text-[#0F172A]">
-            {isPositive ? 'Routine Pulm Consult' : 'Baseline Normal'}
+          <span className={`font-semibold ${isPositive ? 'text-[#DC2626]' : 'text-[#16A34A]'}`}>
+            {isPositive ? 'Routine Pulm Consult (Positive)' : 'Baseline Normal (Negative)'}
           </span>
         </div>
       </div>
@@ -192,11 +192,11 @@ export default function ResultPage({ currentResult, onBackToUpload, onSaveToHist
             <span className="text-xs uppercase font-bold tracking-wider block">
               Model Screening Output
             </span>
-            <div className="text-xl font-bold">
+            <div className={`text-xl font-bold ${isPositive ? 'text-[#DC2626]' : 'text-[#16A34A]'}`}>
               {prediction || (isPositive ? 'TB Positive' : 'TB Negative')}
             </div>
             <div className="text-xs font-medium text-[#64748B]">
-              Model Confidence: <span className="font-bold text-[#0F172A]">{confidence}%</span>
+              Model Confidence: <span className={`font-bold ${isPositive ? 'text-[#DC2626]' : 'text-[#16A34A]'}`}>{confidence}%</span>
             </div>
           </div>
 
@@ -208,7 +208,7 @@ export default function ResultPage({ currentResult, onBackToUpload, onSaveToHist
             </div>
             <div className="w-full bg-slate-100 h-2 rounded-full overflow-hidden">
               <div
-                className={`h-full rounded-full ${isPositive ? 'bg-[#2563EB]' : 'bg-[#16A34A]'}`}
+                className={`h-full rounded-full transition-all duration-300 ${isPositive ? 'bg-[#DC2626]' : 'bg-[#16A34A]'}`}
                 style={{ width: `${Math.min(100, confidence)}%` }}
               />
             </div>
@@ -284,7 +284,7 @@ export default function ResultPage({ currentResult, onBackToUpload, onSaveToHist
             <div className="p-3 rounded-xl bg-[#F8FAFC] border border-[#E2E8F0] flex items-center justify-between">
               <div>
                 <span className="text-[#64748B] block text-[11px]">AI Screening Result:</span>
-                <span className="font-bold text-sm text-[#0F172A]">
+                <span className={`font-bold text-sm ${isPositive ? 'text-[#DC2626]' : 'text-[#16A34A]'}`}>
                   {prediction} ({confidence}% confidence)
                 </span>
               </div>

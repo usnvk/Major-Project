@@ -59,17 +59,17 @@ export default function FLOrchestrationModal({
 
   const batchA = latestProgressA?.batch || (updateA ? 4 : (activeStep >= 2 ? 1 : 0));
   const totalBatchesA = latestProgressA?.total_batches || 4;
-  const lossA = latestProgressA?.loss ?? updateA?.loss ?? nodeA.last_loss ?? 0.421;
-  const accA = latestProgressA?.accuracy ?? updateA?.accuracy ?? nodeA.last_acc ?? 86.4;
+  const lossA = latestProgressA?.loss ?? updateA?.loss ?? nodeA.last_loss ?? null;
+  const accA = latestProgressA?.accuracy ?? updateA?.accuracy ?? nodeA.last_acc ?? null;
 
   const batchB = latestProgressB?.batch || (updateB ? 4 : (activeStep >= 2 ? 1 : 0));
   const totalBatchesB = latestProgressB?.total_batches || 4;
-  const lossB = latestProgressB?.loss ?? updateB?.loss ?? nodeB.last_loss ?? 0.439;
-  const accB = latestProgressB?.accuracy ?? updateB?.accuracy ?? nodeB.last_acc ?? 85.9;
+  const lossB = latestProgressB?.loss ?? updateB?.loss ?? nodeB.last_loss ?? null;
+  const accB = latestProgressB?.accuracy ?? updateB?.accuracy ?? nodeB.last_acc ?? null;
 
   // DP-SGD epsilon
-  const epsA = updateA?.epsilon ?? nodeA.dp_epsilon ?? (0.42 * roundNum).toFixed(2);
-  const epsB = updateB?.epsilon ?? nodeB.dp_epsilon ?? (0.42 * roundNum).toFixed(2);
+  const epsA = updateA?.epsilon ?? nodeA.dp_epsilon ?? null;
+  const epsB = updateB?.epsilon ?? nodeB.dp_epsilon ?? null;
 
   // Aggregation weights calculation
   const nA = updateA?.num_samples || nodeA.dataset_size || 120;
@@ -259,11 +259,11 @@ export default function FLOrchestrationModal({
                   </div>
                   <div>
                     <span className="text-[10px] block">Loss</span>
-                    <span className="font-mono font-semibold text-[#0F172A]">{lossA}</span>
+                    <span className="font-mono font-semibold text-[#0F172A]">{lossA != null ? lossA : '—'}</span>
                   </div>
                   <div>
                     <span className="text-[10px] block">Accuracy</span>
-                    <span className="font-mono font-semibold text-[#16A34A]">{accA}%</span>
+                    <span className="font-mono font-semibold text-[#16A34A]">{accA != null ? `${accA}%` : '—'}</span>
                   </div>
                 </div>
               </div>
@@ -291,11 +291,11 @@ export default function FLOrchestrationModal({
                   </div>
                   <div>
                     <span className="text-[10px] block">Loss</span>
-                    <span className="font-mono font-semibold text-[#0F172A]">{lossB}</span>
+                    <span className="font-mono font-semibold text-[#0F172A]">{lossB != null ? lossB : '—'}</span>
                   </div>
                   <div>
                     <span className="text-[10px] block">Accuracy</span>
-                    <span className="font-mono font-semibold text-[#16A34A]">{accB}%</span>
+                    <span className="font-mono font-semibold text-[#16A34A]">{accB != null ? `${accB}%` : '—'}</span>
                   </div>
                 </div>
               </div>
@@ -410,7 +410,9 @@ export default function FLOrchestrationModal({
               <div className="text-right text-xs">
                 <span className="text-[#64748B] block">Validation Accuracy</span>
                 <span className="font-bold text-[#16A34A] text-sm">
-                  {liveStatus?.validation_accuracy ?? 86.8}% (+2.3%)
+                  {liveStatus?.validation_accuracy != null
+                    ? `${liveStatus.validation_accuracy}%`
+                    : '—'}
                 </span>
               </div>
             </div>
