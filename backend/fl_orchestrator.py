@@ -126,7 +126,7 @@ class FederatedOrchestrator:
                 now = time.time()
                 with self.lock:
                     for nid, info in self.nodes.items():
-                        if now - info.get("last_heartbeat", 0) > 10.0:
+                        if now - info.get("last_heartbeat", 0) > 35.0:
                             info["status"] = "offline"
 
         t = threading.Thread(target=monitor_loop, daemon=True)
@@ -209,7 +209,7 @@ class FederatedOrchestrator:
                 for node_id, node in self.nodes.items()
                 if node_id in {"node_A", "node_B"}
                 and node.get("status") == "online"
-                and now - node.get("last_heartbeat", 0) <= 10.0
+                and now - node.get("last_heartbeat", 0) <= 35.0
             ]
             if len(live_nodes) < 2:
                 return {

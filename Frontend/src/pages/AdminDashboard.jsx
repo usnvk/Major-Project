@@ -107,33 +107,6 @@ export default function AdminDashboard({ onNavigate }) {
     return () => clearInterval(interval);
   }, [isModalOpen, flStatus?.is_active]);
 
-  const handleStartFLRound = async () => {
-    setStartingRound(true);
-    setStatusMsg('');
-
-    const res = await startFLRound({
-      aggregation: aggregationMethod,
-      demo: isDemoMode,
-      dp: true,
-      simulate: isSimulation,
-    });
-
-    setStartingRound(false);
-
-    if (res.success) {
-      setIsModalOpen(true);
-      setStatusMsg(`Round ${res.data.round_id || ''} initiated successfully.`);
-      pollFLData();
-    } else {
-      setStatusMsg(`Failed to initiate round: ${res.error}`);
-    }
-  };
-
-  const handleCancelFLRound = async () => {
-    await cancelFLRound();
-    pollFLData();
-  };
-
   const currentGlobalVersion = flStatus?.global_model_version || 'v1';
   const currentRoundNum = flStatus?.current_round || 1;
   const isRoundActive = Boolean(flStatus?.is_active);
@@ -159,6 +132,39 @@ export default function AdminDashboard({ onNavigate }) {
   const isNodeAOnline = nodeA.status === 'online';
   const isNodeBOnline = nodeB.status === 'online';
   const onlineCount = (isNodeAOnline ? 1 : 0) + (isNodeBOnline ? 1 : 0);
+
+  const handleStartFLRound = async () => {
+    setStatusMsg('');
+
+    if (onlineCount < 2) {
+      setStatusMsg(`Cannot start Federated Round: 2 live hospital nodes are required (currently ${onlineCount}/2 connected). Please connect both Hospital A and Hospital B.`);
+      return;
+    }
+
+    setStartingRound(true);
+
+    const res = await startFLRound({
+      aggregation: aggregationMethod,
+      demo: isDemoMode,
+      dp: true,
+      simulate: isSimulation,
+    });
+
+    setStartingRound(false);
+
+    if (res.success) {
+      setIsModalOpen(true);
+      setStatusMsg(`Round ${res.data?.round_id || ''} initiated successfully.`);
+      pollFLData();
+    } else {
+      setStatusMsg(`Failed to initiate round: ${res.error || 'Server rejected round initiation'}`);
+    }
+  };
+
+  const handleCancelFLRound = async () => {
+    await cancelFLRound();
+    pollFLData();
+  };
 
   return (
     <div className="space-y-6 animate-fade-in pb-16 max-w-7xl mx-auto">
@@ -205,6 +211,32 @@ export default function AdminDashboard({ onNavigate }) {
           )}
         </div>
       </div>
+
+      {/* ── Real-Time Status / Node Pre-flight Alert Banner ── */}
+      {statusMsg && (
+        <div
+          className={`p-4 rounded-2xl border text-sm flex items-center justify-between transition-all animate-fade-in ${
+            statusMsg.includes('Failed') || statusMsg.includes('required') || statusMsg.includes('Cannot') || statusMsg.includes('error')
+              ? 'bg-amber-50 text-amber-900 border-amber-200'
+              : 'bg-emerald-50 text-emerald-900 border-emerald-200'
+          }`}
+        >
+          <div className="flex items-center space-x-2.5">
+            {statusMsg.includes('Failed') || statusMsg.includes('required') || statusMsg.includes('Cannot') || statusMsg.includes('error') ? (
+              <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
+            ) : (
+              <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+            )}
+            <span className="font-semibold">{statusMsg}</span>
+          </div>
+          <button
+            onClick={() => setStatusMsg('')}
+            className="text-xs font-bold px-2.5 py-1 rounded-lg hover:bg-black/5 text-slate-500 hover:text-slate-800 transition"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       {/* ── Persistent Privacy Indicator (Section 14) ── */}
       <div className="p-3.5 rounded-xl bg-[#F0FDFA] border border-[#CCFBF1] flex items-center justify-between text-xs text-[#0F766E]">
