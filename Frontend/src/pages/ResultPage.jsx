@@ -217,10 +217,13 @@ export default function ResultPage({ currentResult, onBackToUpload, onSaveToHist
           {/* Disease Staging if positive */}
           {isPositive && (
             <div className="p-3 bg-[#F8FAFC] rounded-xl border border-[#E2E8F0] space-y-1 text-xs">
-              <span className="text-[#64748B] text-[11px] block">Estimated Classification</span>
+              <span className="text-[#64748B] text-[11px] block">AI Screening Stage Estimate</span>
               <div className="font-semibold text-[#0F172A]">
-                Stage {stage} — {stage === 1 ? 'Early Latent' : stage === 2 ? 'Active Pulmonary' : 'Advanced Fibro-Cavitary'}
+                Stage {stage} — {stage === 1 ? 'Early Latent' : stage === 2 ? 'Active Pulmonary' : stage === 3 ? 'Advanced Pulmonary' : 'Severe / Extensive'}
               </div>
+              <p className="text-[10px] text-[#64748B] leading-relaxed">
+                Triage estimate derived from model confidence; not a confirmed radiological disease stage.
+              </p>
             </div>
           )}
 
@@ -285,7 +288,7 @@ export default function ResultPage({ currentResult, onBackToUpload, onSaveToHist
                   {prediction} ({confidence}% confidence)
                 </span>
               </div>
-              <span className="text-[11px] text-[#64748B]">ResNet-18 v2.1</span>
+              <span className="text-[11px] text-[#64748B]">DenseNet-121 TB v11</span>
             </div>
 
             {/* Doctor Decision Options (Section 19) */}

@@ -9,7 +9,9 @@ DATABASE_PATH = Path(__file__).resolve().parent / "feedback.db"
 
 
 def get_connection() -> sqlite3.Connection:
-    connection = sqlite3.connect(DATABASE_PATH)
+    connection = sqlite3.connect(DATABASE_PATH, timeout=30)
+    connection.execute("PRAGMA busy_timeout = 30000")
+    connection.execute("PRAGMA journal_mode = WAL")
     connection.row_factory = sqlite3.Row
     return connection
 
@@ -74,6 +76,26 @@ def init_db() -> None:
                 pending_active_learning INTEGER DEFAULT 1,
                 created_at TEXT NOT NULL,
                 trained_at TEXT,
+                FOREIGN KEY (prediction_id) REFERENCES predictions(prediction_id)
+            );
+            CREATE TABLE IF NOT EXISTS patient_visits (
+                visit_id TEXT PRIMARY KEY,
+                patient_hash TEXT NOT NULL,
+                visit_date TEXT NOT NULL,
+                previous_visit_id TEXT,
+                symptoms TEXT,
+                doctor_observations TEXT,
+                ai_prediction TEXT,
+                ai_confidence REAL,
+                treatment_stage INTEGER,
+                doctor_review_status TEXT NOT NULL DEFAULT 'pending',
+                doctor_validated_change TEXT,
+                doctor_email TEXT,
+                doctor_name TEXT,
+                xray_image_path TEXT,
+                heatmap_image_path TEXT,
+                prediction_id TEXT,
+                created_at TEXT NOT NULL,
                 FOREIGN KEY (prediction_id) REFERENCES predictions(prediction_id)
             );
             """
@@ -156,6 +178,113 @@ def save_prediction(
                 datetime.now(timezone.utc).isoformat(),
             ),
         )
+
+
+def create_patient_visit(
+    visit_id: str,
+    patient_hash: str,
+    visit_date: str,
+    symptoms: str | None,
+    doctor_observations: str | None,
+    ai_prediction: str | None,
+    ai_confidence: float | None,
+    treatment_stage: int | None,
+    doctor_email: str | None,
+    doctor_name: str | None,
+    xray_image_path: str | None,
+    heatmap_image_path: str | None,
+    prediction_id: str | None,
+) -> dict[str, Any]:
+    with get_connection() as connection:
+        previous = connection.execute(
+            """
+            SELECT visit_id FROM patient_visits
+            WHERE patient_hash = ?
+            ORDER BY visit_date DESC, created_at DESC
+            LIMIT 1
+            """,
+            (patient_hash,),
+        ).fetchone()
+        previous_visit_id = previous["visit_id"] if previous else None
+        connection.execute(
+            """
+            INSERT INTO patient_visits
+            (visit_id, patient_hash, visit_date, previous_visit_id, symptoms,
+             doctor_observations, ai_prediction, ai_confidence, treatment_stage,
+             doctor_review_status, doctor_email, doctor_name, xray_image_path,
+             heatmap_image_path, prediction_id, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                visit_id,
+                patient_hash,
+                visit_date,
+                previous_visit_id,
+                symptoms,
+                doctor_observations,
+                ai_prediction,
+                ai_confidence,
+                treatment_stage,
+                doctor_email,
+                doctor_name,
+                xray_image_path,
+                heatmap_image_path,
+                prediction_id,
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+    visits = get_patient_visits(patient_hash)
+    return visits[-1]
+
+
+def get_patient_visits(patient_hash: str) -> list[dict[str, Any]]:
+    with get_connection() as connection:
+        rows = connection.execute(
+            """
+            SELECT * FROM patient_visits
+            WHERE patient_hash = ?
+            ORDER BY visit_date ASC, created_at ASC
+            """,
+            (patient_hash,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def review_patient_visit(
+    visit_id: str,
+    doctor_validated_change: str,
+    doctor_observations: str,
+    treatment_stage: int | None,
+    doctor_email: str,
+    doctor_name: str,
+) -> dict[str, Any]:
+    if doctor_validated_change not in {"improved", "unchanged", "worsened"}:
+        raise ValueError("Doctor validated change must be improved, unchanged, or worsened")
+    with get_connection() as connection:
+        connection.execute(
+            """
+            UPDATE patient_visits
+            SET doctor_validated_change = ?, doctor_observations = ?,
+                treatment_stage = ?, doctor_review_status = 'reviewed',
+                doctor_email = ?, doctor_name = ?
+            WHERE visit_id = ?
+            """,
+            (
+                doctor_validated_change,
+                doctor_observations,
+                treatment_stage,
+                doctor_email,
+                doctor_name,
+                visit_id,
+            ),
+        )
+        row = connection.execute(
+            "SELECT * FROM patient_visits WHERE visit_id = ?",
+            (visit_id,),
+        ).fetchone()
+    if row is None:
+        raise KeyError("Visit not found")
+    return dict(row)
 
 
 def prediction_exists(prediction_id: str) -> bool:
@@ -655,12 +784,21 @@ def seed_default_users_and_scans() -> None:
 
         # 3. Ensure the single Administrative Account exists
         admin_row = connection.execute("SELECT id FROM users WHERE role = 'admin'").fetchone()
-        if not admin_row:
-            create_user(
-                email="admin@pulmoscan.org",
-                password="AdminPass123!",
-                name="System Administrator",
-                role="admin",
-                hospital_node="Central Aggregation Hub",
-            )
-            log_audit_event("system@pulmoscan.org", "admin", "SYSTEM_INITIALIZED", "system", "Default Admin account initialized with AdminPass123!.")
+
+    # create_user() and log_audit_event() open their own connections. Keep this
+    # outside the seed connection's transaction to avoid SQLite database locks.
+    if not admin_row:
+        create_user(
+            email="admin@pulmoscan.org",
+            password="AdminPass123!",
+            name="System Administrator",
+            role="admin",
+            hospital_node="Central Aggregation Hub",
+        )
+        log_audit_event(
+            "system@pulmoscan.org",
+            "admin",
+            "SYSTEM_INITIALIZED",
+            "system",
+            "Default Admin account initialized with AdminPass123!.",
+        )

@@ -2,6 +2,8 @@
   "1": {
     "name": "Stage 1 - Latent",
     "medication": "Isoniazid (preventive therapy)",
+    "exercise": "Light walking 15-20 minutes daily and breathing exercises",
+    "possible_diseases": ["Latent TB", "Old granulomatous scar", "Early pneumonia"],
     "precautions": [
       "Regular follow-up checkups",
       "No isolation needed - not contagious"
@@ -12,6 +14,8 @@
   "2": {
     "name": "Stage 2 - Mild",
     "medication": "Isoniazid + Rifampicin",
+    "exercise": "Gentle walking 20-30 minutes daily once fever is controlled",
+    "possible_diseases": ["Active pulmonary TB", "Community-acquired pneumonia", "Post-infectious consolidation"],
     "precautions": [
       "Wear mask indoors",
       "Avoid crowded places",
@@ -23,6 +27,8 @@
   "3": {
     "name": "Stage 3 - Moderate",
     "medication": "4-drug regimen (HRZE: Isoniazid, Rifampicin, Pyrazinamide, Ethambutol)",
+    "exercise": "Only medically approved breathing and mobility exercises",
+    "possible_diseases": ["Moderate pulmonary TB", "Cavitary bacterial infection", "Fungal lung infection"],
     "precautions": [
       "Isolate from family members",
       "Daily symptom monitoring",
@@ -34,6 +40,8 @@
   "4": {
     "name": "Stage 4 - Severe",
     "medication": "Extended HRZE regimen + specialist supervision",
+    "exercise": "Bed mobility and supervised respiratory physiotherapy only",
+    "possible_diseases": ["Severe pulmonary TB", "Miliary TB", "ARDS or extensive bacterial pneumonia"],
     "precautions": [
       "Hospitalization strongly advised",
       "Complete isolation",

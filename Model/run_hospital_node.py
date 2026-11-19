@@ -20,6 +20,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import base64
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -196,26 +197,31 @@ def load_hospital_dataset(path_input: Optional[str], default_dir: Path, tfms) ->
             image_files = [f for f in target_path.rglob("*") if f.suffix.lower() in valid_exts]
 
         if image_files:
+            labeled_files = []
+            for f in image_files:
+                fl = f.name.lower()
+                if any(k in fl for k in ["pos", "tb", "tuberculosis", "positive"]):
+                    labeled_files.append((f, 1))
+                elif any(k in fl for k in ["neg", "normal", "healthy", "negative"]):
+                    labeled_files.append((f, 0))
+            if not labeled_files:
+                print(
+                    f"\n{YELLOW}[DATA] No labeled filenames found. "
+                    "Use folders named Normal and Tuberculosis/TB_Positive.{RESET}"
+                )
+                return torch.utils.data.TensorDataset(torch.empty(0, 3, 224, 224), torch.empty(0, dtype=torch.long)), str(target_path), 0, 0
+
             class FlatCXRDataset(torch.utils.data.Dataset):
-                def __init__(self, files, transform):
-                    self.files = files
+                def __init__(self, labeled_files, transform):
+                    self.files = labeled_files
                     self.transform = transform
-                    self.labels = []
-                    for f in files:
-                        fl = f.name.lower()
-                        if any(k in fl for k in ["pos", "tb", "tuberculosis", "positive"]):
-                            self.labels.append(1)
-                        elif any(k in fl for k in ["neg", "normal", "healthy", "negative"]):
-                            self.labels.append(0)
-                        else:
-                            self.labels.append(len(self.labels) % 2)
+                    self.labels = [label for _, label in labeled_files]
 
                 def __len__(self):
                     return len(self.files)
 
                 def __getitem__(self, idx):
-                    f = self.files[idx]
-                    lbl = self.labels[idx]
+                    f, lbl = self.files[idx]
                     try:
                         if f.suffix.lower() in [".dcm", ".dicom"]:
                             try:
@@ -234,14 +240,18 @@ def load_hospital_dataset(path_input: Optional[str], default_dir: Path, tfms) ->
                         img = self.transform(img)
                     return img, lbl
 
-            ds = FlatCXRDataset(image_files, tfms)
+            ds = FlatCXRDataset(labeled_files, tfms)
             pos_count = sum(1 for l in ds.labels if l == 1)
             neg_count = sum(1 for l in ds.labels if l == 0)
             return ds, str(target_path), pos_count, neg_count
 
-    # Case C: Fallback synthetic dataset
-    ds = [(torch.randn(3, 224, 224), torch.randint(0, 2, (1,)).item()) for _ in range(64)]
-    return ds, str(target_path), 32, 32
+    # Case C: No labeled real dataset
+    return (
+        torch.utils.data.TensorDataset(torch.empty(0, 3, 224, 224), torch.empty(0, dtype=torch.long)),
+        str(target_path),
+        0,
+        0,
+    )
 
 
 def main():
@@ -313,6 +323,13 @@ def main():
 
     local_dataset, resolved_path, pos_count, neg_count = load_hospital_dataset(selected_data_path, default_dir, tfms)
     dataset_size = len(local_dataset)
+    if dataset_size <= 0 or pos_count <= 0 or neg_count <= 0:
+        print(
+            f"\n{YELLOW}[DATA] Real two-class training dataset required.{RESET}\n"
+            "Create folders named Normal and Tuberculosis (or TB_Negative/TB_Positive), "
+            "with real PNG/JPG/DICOM chest X-rays in each folder."
+        )
+        return
 
     print(f"\n[DATA] {BOLD}Active Dataset Path:{RESET} {resolved_path}")
     print(f"  • TB_Positive Scans:  {pos_count} patient radiographs")
@@ -355,6 +372,16 @@ def main():
         try:
             from opacus import PrivacyEngine
             privacy_engine = PrivacyEngine()
+            model, optimizer, dp_loader = privacy_engine.make_private(
+                module=model,
+                optimizer=optimizer,
+                data_loader=torch.utils.data.DataLoader(
+                    local_dataset,
+                    batch_size=args.batch_size,
+                ),
+                noise_multiplier=args.noise_multiplier,
+                max_grad_norm=args.max_grad_norm,
+            )
             print(f"[DP-SGD] Gradient clipping enabled (max_norm={args.max_grad_norm})")
             print(f"[DP-SGD] Calibrated Gaussian noise scale (sigma={args.noise_multiplier})")
         except Exception:
@@ -527,7 +554,11 @@ def main():
 
                 final_loss = round(running_loss / max(1, batch_limit), 4)
                 final_acc = round((correct / max(1, total)) * 100, 1)
-                calculated_epsilon = round(0.42 * current_round_num + np.random.uniform(0.01, 0.05), 2)
+                calculated_epsilon = (
+                    round(privacy_engine.get_epsilon(delta=args.target_delta), 2)
+                    if privacy_engine is not None
+                    else 0.0
+                )
 
                 print(f"\n[TRAINING] Local training completed successfully:")
                 print(f"  • Final Local Loss:     {final_loss}")
@@ -546,8 +577,11 @@ def main():
                 total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
                 update_size_mb = calculate_serialized_size_mb(trained_ndarrays)
 
-                param_bytes = pickle.dumps(trained_ndarrays)
+                state_buffer = io.BytesIO()
+                torch.save(model.state_dict(), state_buffer)
+                param_bytes = state_buffer.getvalue()
                 weight_hash = hashlib.sha256(param_bytes).hexdigest()[:16]
+                parameters_base64 = base64.b64encode(param_bytes).decode("ascii")
 
                 print(f"  • Model Architecture: ResNet-18 ({total_params:,} parameters)")
                 print(f"  • Serialized Weights: {update_size_mb} MB")
@@ -583,6 +617,7 @@ def main():
                         "num_samples": active_size,
                         "size_mb": update_size_mb,
                         "weights_hash": weight_hash,
+                        "parameters_base64": parameters_base64,
                     },
                 )
 

@@ -50,26 +50,30 @@ def main():
     train_dir = os.path.join("dataset", node, "train")
     test_dir = os.path.join("dataset", node, "test")
 
-    # Fallback to demo synthetic dataset directory if dataset not downloaded
-    if not (os.path.exists(train_dir) and os.path.exists(test_dir)):
-        train_dir = os.path.join("data", "valid_chest_xray", "train")
-        test_dir = os.path.join("data", "valid_chest_xray", "val")
-
     pending_al_ids: List[str] = []
-    if os.path.exists(train_dir):
-        train_loader, pending_al_ids = get_dataloader(
-            train_dir, batch_size=args.batch_size, is_train=True, use_active_learning=True, node_id=node
+    if not os.path.exists(train_dir):
+        raise FileNotFoundError(
+            f"[{node}] Local training dataset missing: {train_dir}. "
+            "Place real Normal/TB chest X-rays in this folder; dummy training is disabled."
         )
-    else:
-        # Fallback in-memory tensor loader
-        dummy_data = [(torch.randn(3, 224, 224), torch.randint(0, 2, (1,)).item()) for _ in range(32)]
-        train_loader = torch.utils.data.DataLoader(dummy_data, batch_size=args.batch_size)
+    if not os.path.exists(test_dir):
+        raise FileNotFoundError(
+            f"[{node}] Local test dataset missing: {test_dir}. "
+            "Place real Normal/TB chest X-rays in this folder; dummy evaluation is disabled."
+        )
 
-    if os.path.exists(test_dir):
-        test_loader = get_dataloader(test_dir, batch_size=args.batch_size, is_train=False)
-    else:
-        dummy_test = [(torch.randn(3, 224, 224), torch.randint(0, 2, (1,)).item()) for _ in range(16)]
-        test_loader = torch.utils.data.DataLoader(dummy_test, batch_size=args.batch_size)
+    train_loader, pending_al_ids = get_dataloader(
+        train_dir,
+        batch_size=args.batch_size,
+        is_train=True,
+        use_active_learning=True,
+        node_id=node,
+    )
+    test_loader = get_dataloader(
+        test_dir,
+        batch_size=args.batch_size,
+        is_train=False,
+    )
 
     sample_count = len(train_loader.dataset) if hasattr(train_loader, "dataset") else 32
     print(f"[{node}] Local dataset ready: {sample_count} training samples (Active Learning cases: {len(pending_al_ids)})")

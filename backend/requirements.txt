@@ -7,5 +7,7 @@ torch==2.6.0
 torchvision==0.21.0
 numpy>=1.24.0
 opencv-python>=4.8.0
+onnxruntime>=1.23.0
+kaggle>=1.7.4.2
 pydicom>=2.4.0
 cryptography>=41.0.0

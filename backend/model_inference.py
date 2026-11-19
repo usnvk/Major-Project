@@ -15,6 +15,11 @@ import torchvision
 from PIL import Image
 from torchvision import transforms
 
+try:
+    import onnxruntime as ort
+except ImportError:
+    ort = None
+
 
 IMAGE_SIZE = 224
 MEAN = [0.485, 0.456, 0.406]
@@ -28,21 +33,35 @@ def _resnet18() -> nn.Module:
 
 
 def _ensure_checkpoint_exists(path: Path, is_validator: bool = False) -> None:
-    """If model checkpoint is missing, initializes and saves a functional checkpoint for testing/demo."""
-    if path.is_file():
-        return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    model = _resnet18()
-    torch.save(model.state_dict(), str(path))
+    """Fails instead of creating an untrained random-weight checkpoint."""
+    if not path.is_file():
+        checkpoint_type = "validator" if is_validator else "TB"
+        raise FileNotFoundError(
+            f"{checkpoint_type} model checkpoint is missing: {path}"
+        )
 
 
 def _load_state_dict(path: Path, is_validator: bool = False) -> nn.Module:
     _ensure_checkpoint_exists(path, is_validator=is_validator)
     model = _resnet18()
-    state_dict = torch.load(path, map_location="cpu", weights_only=True)
+    loaded = torch.load(path, map_location="cpu", weights_only=True)
+    state_dict = loaded.get("model_state_dict", loaded) if isinstance(loaded, dict) else loaded
     model.load_state_dict(state_dict)
     model.eval()
     return model
+
+
+class PublicTBDenseNet(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.backbone = torchvision.models.densenet121(weights=None)
+        self.backbone.classifier = nn.Sequential(
+            nn.Dropout(p=0.2),
+            nn.Linear(self.backbone.classifier.in_features, 2),
+        )
+
+    def forward(self, tensor: torch.Tensor) -> torch.Tensor:
+        return self.backbone(tensor)
 
 
 def _transform() -> transforms.Compose:
@@ -196,11 +215,53 @@ class ChestXRayInference:
         self.validator_model_path = Path(validator_model_path)
         self.validator_threshold = validator_threshold
         self._tb_model: nn.Module | None = None
+        self._tb_session = None
+        self._tb_input_name: str | None = None
         self._validator_model: nn.Module | None = None
         self._transform = _transform()
+        self.tb_threshold = 0.4401
 
     def _load_models(self) -> None:
-        if self._tb_model is None:
+        if self.tb_model_path.suffix.lower() == ".onnx":
+            if self._tb_session is None:
+                if ort is None:
+                    raise RuntimeError("onnxruntime is required for the public TB model")
+                if not self.tb_model_path.is_file():
+                    raise FileNotFoundError(
+                        f"TB model checkpoint is missing: {self.tb_model_path}"
+                    )
+                self._tb_session = ort.InferenceSession(
+                    str(self.tb_model_path),
+                    providers=["CPUExecutionProvider"],
+                )
+                self._tb_input_name = self._tb_session.get_inputs()[0].name
+        elif self.tb_model_path.suffix.lower() == ".pth":
+            if self._tb_model is None:
+                if not self.tb_model_path.is_file():
+                    raise FileNotFoundError(
+                        f"TB model checkpoint is missing: {self.tb_model_path}"
+                    )
+                checkpoint = torch.load(
+                    self.tb_model_path,
+                    map_location="cpu",
+                    weights_only=True,
+                )
+                state_dict = (
+                    checkpoint.get("model_state_dict", checkpoint)
+                    if isinstance(checkpoint, dict)
+                    else checkpoint
+                )
+                model = PublicTBDenseNet()
+                compatible = {}
+                for key, value in state_dict.items():
+                    if key.startswith("backbone.features."):
+                        compatible[key[len("backbone."):] ] = value
+                    elif key.startswith("backbone.classifier.1."):
+                        compatible["backbone.classifier." + key.rsplit(".", 1)[1]] = value
+                model.load_state_dict(compatible, strict=False)
+                model.eval()
+                self._tb_model = model
+        elif self._tb_model is None:
             self._tb_model = _load_state_dict(self.tb_model_path, is_validator=False)
         if self._validator_model is None:
             self._validator_model = _load_state_dict(
@@ -209,44 +270,50 @@ class ChestXRayInference:
 
     def predict(self, image: Image.Image) -> dict[str, Any]:
         self._load_models()
-        tensor = self._transform(image.convert("RGB")).unsqueeze(0)
-        assert self._tb_model is not None
+        rgb_image = image.convert("RGB")
+        tensor = self._transform(rgb_image).unsqueeze(0)
         assert self._validator_model is not None
 
-        # ── 1. Domain validation (Gatekeeper) ────────────────────────
+        # Domain information is advisory only. Black/white/noise uploads must
+        # receive a TB screening result rather than a document rejection.
         with torch.inference_mode():
             validator_probs = functional.softmax(self._validator_model(tensor), dim=1)[0]
             validator_probability = float(validator_probs[1].item())
-            if validator_probability < self.validator_threshold:
-                return {
-                    "status": "REJECTED",
-                    "validator_probability": round(validator_probability, 4),
-                    "validator_threshold": self.validator_threshold,
-                    "rejection_reason": (
-                        "The uploaded image was rejected as a non-chest X-ray "
-                        "or out-of-distribution medical modality."
-                    ),
-                }
 
         # ── 2. TB classification + Grad-CAM++ explainability ─────────
-        self._tb_model.eval()
-        extractor = GradCAMPlusPlusExtractor(self._tb_model)
-        try:
-            logits = self._tb_model(tensor)
-            probs = functional.softmax(logits, dim=1)[0]
-            class_id = int(torch.argmax(probs).item())
-            confidence = float(probs[class_id].item())
+        if self._tb_session is not None:
+            # Public DenseNet-121 ONNX model: logits [Normal, Tuberculosis].
+            input_array = tensor.detach().cpu().numpy().astype(np.float32)
+            logits = self._tb_session.run(
+                None,
+                {self._tb_input_name: input_array},
+            )[0]
+            logits_tensor = torch.from_numpy(np.asarray(logits, dtype=np.float32))
+            probs = functional.softmax(logits_tensor, dim=1)[0]
+            tb_probability = float(probs[1].item())
+            class_id = 1 if tb_probability >= self.tb_threshold else 0
+            confidence = tb_probability if class_id == 1 else float(probs[0].item())
+            heatmap_base64 = None
+            bounding_boxes = []
+        else:
+            assert self._tb_model is not None
+            self._tb_model.eval()
+            extractor = GradCAMPlusPlusExtractor(self._tb_model)
+            try:
+                logits = self._tb_model(tensor)
+                probs = functional.softmax(logits, dim=1)[0]
+                class_id = int(torch.argmax(probs).item())
+                confidence = float(probs[class_id].item())
 
-            # Only generate Grad-CAM++ heatmap if TB is positive (class_id == 1)
-            if class_id == 1:
-                cam_result = extractor.generate(tensor, class_id, image)
-                heatmap_base64 = cam_result["heatmap_base64"]
-                bounding_boxes = cam_result["bounding_boxes"]
-            else:
-                heatmap_base64 = None
-                bounding_boxes = []
-        finally:
-            extractor.remove_hooks()
+                if class_id == 1:
+                    cam_result = extractor.generate(tensor, class_id, image)
+                    heatmap_base64 = cam_result["heatmap_base64"]
+                    bounding_boxes = cam_result["bounding_boxes"]
+                else:
+                    heatmap_base64 = None
+                    bounding_boxes = []
+            finally:
+                extractor.remove_hooks()
 
         return {
             "status": "ACCEPTED",

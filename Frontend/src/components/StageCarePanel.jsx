@@ -1,5 +1,5 @@
 import React from 'react';
-import { Pill, AlertTriangle, Utensils, CheckCircle2, Stethoscope, ChevronRight } from 'lucide-react';
+import { Pill, AlertTriangle, Utensils, Activity, Microscope, CheckCircle2 } from 'lucide-react';
 import { getStageInformation } from '../utils/stageData';
 
 export default function StageCarePanel({ stage }) {
@@ -120,6 +120,38 @@ export default function StageCarePanel({ stage }) {
           <div className="mt-4 pt-3 border-t border-slate-200 text-[11px] text-slate-500 font-medium flex items-center justify-between">
             <span>Nutritional Status:</span>
             <span className="text-emerald-700">High Protein Support</span>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div className="bg-slate-50/70 p-5 rounded-2xl border border-slate-200">
+            <div className="flex items-center space-x-2 text-violet-700 font-bold text-base mb-4 pb-2 border-b border-slate-200">
+              <Activity className="w-5 h-5" />
+              <span>Exercise Guidance</span>
+            </div>
+            <ul className="space-y-3">
+              {stageInfo.exercise?.map((item, idx) => (
+                <li key={idx} className="flex items-start space-x-2.5 text-xs text-slate-700 leading-relaxed">
+                  <span className="w-1.5 h-1.5 rounded-full bg-violet-500 shrink-0 mt-1.5"></span>
+                  <span>{item}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          <div className="bg-slate-50/70 p-5 rounded-2xl border border-slate-200">
+            <div className="flex items-center space-x-2 text-rose-700 font-bold text-base mb-4 pb-2 border-b border-slate-200">
+              <Microscope className="w-5 h-5" />
+              <span>Possible Differential Diseases</span>
+            </div>
+            <ul className="space-y-3">
+              {stageInfo.possible_diseases?.map((item, idx) => (
+                <li key={idx} className="flex items-start space-x-2.5 text-xs text-slate-700 leading-relaxed">
+                  <span className="w-1.5 h-1.5 rounded-full bg-rose-500 shrink-0 mt-1.5"></span>
+                  <span>{item}</span>
+                </li>
+              ))}
+            </ul>
           </div>
         </div>
 

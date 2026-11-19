@@ -4,6 +4,7 @@ import os
 import sys
 import time
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +36,9 @@ try:
         get_recent_audit_logs,
         get_scans_by_role,
         get_user_by_email,
+        create_patient_visit,
+        get_patient_visits,
+        review_patient_visit,
         init_db,
         log_audit_event,
         save_feedback,
@@ -67,6 +71,9 @@ except ImportError:
         get_recent_audit_logs,
         get_scans_by_role,
         get_user_by_email,
+        create_patient_visit,
+        get_patient_visits,
+        review_patient_visit,
         init_db,
         log_audit_event,
         save_feedback,
@@ -86,7 +93,7 @@ MODELS_DIR = BACKEND_DIR / "models"
 MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
 MODEL_PATH = Path(
-    os.getenv("MODEL_PATH", str(MODELS_DIR / "federated_model.pth"))
+    os.getenv("MODEL_PATH", str(MODELS_DIR / "tb_public.onnx"))
 )
 VALIDATOR_MODEL_PATH = Path(
     os.getenv("VALIDATOR_MODEL_PATH", str(MODELS_DIR / "chest_xray_validator.pth"))
@@ -173,6 +180,7 @@ class FLUpdateSubmitInput(BaseModel):
     num_samples: int
     size_mb: float = 11.2
     weights_hash: str | None = None
+    parameters_base64: str | None = None
 
 
 class FLEventEmitInput(BaseModel):
@@ -210,16 +218,39 @@ class FeedbackInput(BaseModel):
             raise ValueError("confirmed_stage is required for TB Positive")
 
 
+class PatientVisitCreateInput(BaseModel):
+    patient_hash: str = Field(min_length=1)
+    visit_date: str = Field(min_length=1)
+    symptoms: str | None = None
+    doctor_observations: str | None = None
+    ai_prediction: str | None = None
+    ai_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    treatment_stage: int | None = Field(default=None, ge=1, le=4)
+    doctor_email: str | None = None
+    doctor_name: str | None = None
+    xray_image_path: str | None = None
+    heatmap_image_path: str | None = None
+    prediction_id: str | None = None
+
+
+class PatientVisitReviewInput(BaseModel):
+    visit_id: str = Field(min_length=1)
+    validated_change: str
+    doctor_observations: str = ""
+    treatment_stage: int | None = Field(default=None, ge=1, le=4)
+    doctor_email: str = "doctor"
+    doctor_name: str = "Attending Clinician"
+
+
 def get_stage_from_confidence(confidence: float) -> int:
-    if confidence >= 0.95:
-        return 4
+    # Triage estimate only: this confidence score is not a radiological stage.
     if confidence >= 0.85:
-        return 3
+        return 4
     if confidence >= 0.70:
+        return 3
+    if confidence >= 0.55:
         return 2
-    if confidence >= 0.60:
-        return 1
-    return 0
+    return 1
 
 
 def _load_inference() -> ChestXRayInference:
@@ -387,6 +418,60 @@ def list_scans(role: str = "doctor", patient_hash: str | None = None, limit: int
     return get_scans_by_role(role=role, patient_hash=patient_hash, limit=limit)
 
 
+@app.post("/patient-visits")
+def create_visit(data: PatientVisitCreateInput, role: str = "doctor") -> dict[str, Any]:
+    if role not in {"doctor", "admin"}:
+        raise HTTPException(status_code=403, detail="Only doctors or administrators can create patient visits.")
+    visit_id = str(uuid.uuid4())
+    return create_patient_visit(
+        visit_id=visit_id,
+        patient_hash=data.patient_hash,
+        visit_date=data.visit_date,
+        symptoms=data.symptoms,
+        doctor_observations=data.doctor_observations,
+        ai_prediction=data.ai_prediction,
+        ai_confidence=data.ai_confidence,
+        treatment_stage=data.treatment_stage,
+        doctor_email=data.doctor_email,
+        doctor_name=data.doctor_name,
+        xray_image_path=data.xray_image_path,
+        heatmap_image_path=data.heatmap_image_path,
+        prediction_id=data.prediction_id,
+    )
+
+
+@app.get("/patient-visits/{patient_hash}")
+def list_patient_visits(patient_hash: str, role: str = "doctor", viewer_patient_hash: str | None = None) -> list[dict[str, Any]]:
+    if role == "patient" and viewer_patient_hash != patient_hash:
+        raise HTTPException(status_code=403, detail="You cannot access another patient's visit timeline.")
+    visits = get_patient_visits(patient_hash)
+    comparison = []
+    for index, visit in enumerate(visits):
+        item = dict(visit)
+        item["previous_visit"] = visits[index - 1] if index > 0 else None
+        comparison.append(item)
+    return comparison
+
+
+@app.post("/patient-visits/review")
+def review_visit(data: PatientVisitReviewInput, role: str = "doctor") -> dict[str, Any]:
+    if role != "doctor":
+        raise HTTPException(status_code=403, detail="Only doctors can validate visit progress.")
+    try:
+        return review_patient_visit(
+            visit_id=data.visit_id,
+            doctor_validated_change=data.validated_change,
+            doctor_observations=data.doctor_observations,
+            treatment_stage=data.treatment_stage,
+            doctor_email=data.doctor_email,
+            doctor_name=data.doctor_name,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+
+
 @app.get("/audit/recent")
 def recent_audit(limit: int = 25) -> list[dict[str, Any]]:
     """Returns recent HIPAA compliance events from the SQLite audit table."""
@@ -443,16 +528,6 @@ async def predict(
             status_code=503, detail=f"Prediction unavailable: {error}"
         ) from error
 
-    if inference_result["status"] != "ACCEPTED":
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "message": inference_result["rejection_reason"],
-                "validator_probability": inference_result["validator_probability"],
-                "validator_threshold": inference_result["validator_threshold"],
-            },
-        )
-
     confidence = float(inference_result["confidence"])
     is_positive = inference_result["label"] == "Tuberculosis"
     stage = get_stage_from_confidence(confidence) if is_positive else 0
@@ -484,6 +559,35 @@ async def predict(
         uploaded_by_email=uploaded_by,
         is_dicom=is_dicom,
         image_path=str(cached_image_path),
+    )
+
+    heatmap_path = cached_image_path.parent / f"{prediction_id}_heatmap.png"
+    heatmap_base64 = inference_result.get("heatmap_base64")
+    if heatmap_base64:
+        try:
+            import base64
+
+            encoded = heatmap_base64.split(",", 1)[1]
+            heatmap_path.write_bytes(base64.b64decode(encoded))
+        except Exception:
+            heatmap_path = None
+    else:
+        heatmap_path = None
+
+    create_patient_visit(
+        visit_id=str(uuid.uuid4()),
+        patient_hash=final_patient_hash,
+        visit_date=datetime.now(timezone.utc).date().isoformat(),
+        symptoms=None,
+        doctor_observations=None,
+        ai_prediction=result,
+        ai_confidence=confidence,
+        treatment_stage=stage or None,
+        doctor_email=uploaded_by,
+        doctor_name=None,
+        xray_image_path=str(cached_image_path),
+        heatmap_image_path=str(heatmap_path) if heatmap_path else None,
+        prediction_id=prediction_id,
     )
 
     log_audit_event(
@@ -940,6 +1044,7 @@ def submit_fl_update(payload: FLUpdateSubmitInput):
         num_samples=payload.num_samples,
         size_mb=payload.size_mb,
         weights_hash=payload.weights_hash,
+        parameters_base64=payload.parameters_base64,
     )
     if res.get("status") == "error":
         raise HTTPException(status_code=400, detail=res.get("message"))

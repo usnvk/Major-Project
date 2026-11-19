@@ -68,8 +68,8 @@ class FederatedOrchestrator:
         # Global Model Versioning (Section 8)
         self.global_version = "v1"
         self.global_checkpoint_path = str(MODEL_DIR / "models" / "federated_model.pth")
-        self.validation_accuracy: Optional[float] = 84.5
-        self.validation_loss: Optional[float] = 0.362
+        self.validation_accuracy: Optional[float] = None
+        self.validation_loss: Optional[float] = None
 
         # Node Registry & Heartbeats (Section 29)
         self.nodes: Dict[str, Dict[str, Any]] = {
@@ -78,7 +78,7 @@ class FederatedOrchestrator:
                 "name": "HOSPITAL A — URBAN REFERRAL CENTER",
                 "status": "offline",
                 "ip_address": None,
-                "dataset_size": 120,
+                "dataset_size": 0,
                 "model_version": "v1",
                 "last_heartbeat": 0,
                 "last_loss": None,
@@ -90,7 +90,7 @@ class FederatedOrchestrator:
                 "name": "HOSPITAL B — RURAL DISTRICT CLINIC",
                 "status": "offline",
                 "ip_address": None,
-                "dataset_size": 120,
+                "dataset_size": 0,
                 "model_version": "v1",
                 "last_heartbeat": 0,
                 "last_loss": None,
@@ -107,20 +107,7 @@ class FederatedOrchestrator:
         self.event_subscribers: List[Any] = []
 
         # Model Registry (Section 32)
-        self.model_registry: List[Dict[str, Any]] = [
-            {
-                "version": "v1",
-                "round": 0,
-                "timestamp": "2026-10-06T10:00:00Z",
-                "status": "Current",
-                "accuracy": 84.5,
-                "loss": 0.362,
-                "aggregation": "Pre-trained Base",
-                "checkpoint": "federated_model_v1.pth",
-                "clients": 2,
-                "samples": 240,
-            }
-        ]
+        self.model_registry: List[Dict[str, Any]] = []
 
         # Round History (Section 31)
         self.round_history: List[Dict[str, Any]] = []
@@ -197,14 +184,34 @@ class FederatedOrchestrator:
     def start_round(
         self,
         aggregation: str = "FedAvg",
-        demo: bool = True,
-        dp: bool = True,
+        demo: bool = False,
+        dp: bool = False,
         simulate: bool = False,
     ) -> Dict[str, Any]:
-        """Initiates a real Federated Learning round."""
+        """Initiates a real Federated Learning round only with live hospital nodes."""
         with self.lock:
             if self.is_active:
                 return {"status": "error", "message": "A federated learning round is already in progress."}
+
+            if simulate:
+                return {
+                    "status": "error",
+                    "message": "Simulated federated learning is disabled. Register Hospital A and Hospital B and run the Flower clients.",
+                }
+
+            now = time.time()
+            live_nodes = [
+                node_id
+                for node_id, node in self.nodes.items()
+                if node_id in {"node_A", "node_B"}
+                and node.get("status") == "online"
+                and now - node.get("last_heartbeat", 0) <= 10.0
+            ]
+            if len(live_nodes) < 2:
+                return {
+                    "status": "error",
+                    "message": "Two live hospital nodes are required. Start the Hospital A and Hospital B Flower clients.",
+                }
 
             self.is_active = True
             self.aggregation_method = aggregation
@@ -249,11 +256,6 @@ class FederatedOrchestrator:
 
         print(f"[ROUND]  Waiting for local edge training on Hospital laptops...")
 
-        # If simulation mode requested (fail-safe for single laptop), spawn background client threads
-        if simulate:
-            print(f"[SIMULATION] Spawning local simulated client training threads...")
-            threading.Thread(target=self._run_simulated_edge_clients, args=(dp, demo), daemon=True).start()
-
         return {
             "status": "round_started",
             "round": self.current_round,
@@ -261,37 +263,6 @@ class FederatedOrchestrator:
             "global_model": self.global_version,
             "aggregation": self.aggregation_method,
         }
-
-    def _run_simulated_edge_clients(self, dp: bool, demo: bool):
-        """Simulation runner for when external laptops are not connected (Section 30)."""
-        time.sleep(1.5)
-        # Notify training started
-        self.emit_event("LOCAL_TRAINING_STARTED", {"node_id": "node_A", "dataset_size": 120})
-        self.emit_event("LOCAL_TRAINING_STARTED", {"node_id": "node_B", "dataset_size": 120})
-
-        # Simulate batch progress
-        batches = 4 if demo else 8
-        delay = 1.6 if demo else 0.5
-
-        for b in range(1, batches + 1):
-            time.sleep(delay)
-            loss_a = round(0.58 - (b * 0.05) + np.random.uniform(0.01, 0.03), 4)
-            acc_a = round(74.0 + (b * 2.8) + np.random.uniform(0.2, 0.8), 1)
-            loss_b = round(0.61 - (b * 0.04) + np.random.uniform(0.01, 0.03), 4)
-            acc_b = round(72.5 + (b * 2.9) + np.random.uniform(0.2, 0.8), 1)
-
-            self.emit_event("LOCAL_TRAINING_PROGRESS", {
-                "node_id": "node_A", "batch": b, "total_batches": batches, "loss": loss_a, "accuracy": acc_a
-            })
-            self.emit_event("LOCAL_TRAINING_PROGRESS", {
-                "node_id": "node_B", "batch": b, "total_batches": batches, "loss": loss_b, "accuracy": acc_b
-            })
-
-        # Submit simulated updates
-        time.sleep(1.0)
-        self.submit_update("node_A", self.current_round, 0.385, 85.2, round(0.42 * self.current_round, 2), 120, 11.2)
-        time.sleep(0.5)
-        self.submit_update("node_B", self.current_round, 0.398, 84.1, round(0.42 * self.current_round, 2), 120, 11.2)
 
     def submit_update(
         self,
@@ -303,6 +274,7 @@ class FederatedOrchestrator:
         num_samples: int,
         size_mb: float,
         weights_hash: Optional[str] = None,
+        parameters_base64: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Receives local model parameter updates from Hospital A or B."""
         with self.lock:
@@ -317,6 +289,7 @@ class FederatedOrchestrator:
                 "num_samples": num_samples,
                 "size_mb": size_mb,
                 "weights_hash": weights_hash,
+                "parameters_base64": parameters_base64,
                 "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             }
             received_count = len(self.round_updates)
@@ -347,152 +320,159 @@ class FederatedOrchestrator:
 
         # If both Hospital A and Hospital B updates have arrived, trigger aggregation
         if received_count >= 2:
-            threading.Thread(target=self._execute_central_aggregation, daemon=True).start()
+            missing_parameters = [
+                node_id
+                for node_id in ("node_A", "node_B")
+                if not self.round_updates.get(node_id, {}).get("parameters_base64")
+            ]
+            if missing_parameters:
+                return {
+                    "status": "updates_received",
+                    "received_count": received_count,
+                    "message": "Metrics received, but real model parameter tensors are missing.",
+                }
+
+            result = self._execute_two_node_fedavg()
+            if result.get("status") == "error":
+                return result
+            return {
+                "status": "round_completed",
+                "received_count": received_count,
+                **result,
+            }
 
         return {"status": "update_accepted", "received_count": received_count}
 
-    def _execute_central_aggregation(self):
-        """Executes real FedAvg weighted aggregation and checkpoints the new model."""
-        time.sleep(0.8)
-        with self.lock:
-            self.stage = "aggregating"
+    def _execute_two_node_fedavg(self) -> Dict[str, Any]:
+        import base64
+        import io
 
-        nA = self.round_updates.get("node_A", {}).get("num_samples", 120)
-        nB = self.round_updates.get("node_B", {}).get("num_samples", 120)
-        N = nA + nB
-        wA = round(nA / N, 4)
-        wB = round(nB / N, 4)
+        updates = []
+        for node_id in ("node_A", "node_B"):
+            update = self.round_updates[node_id]
+            try:
+                payload = base64.b64decode(update["parameters_base64"], validate=True)
+                state_dict = torch.load(
+                    io.BytesIO(payload),
+                    map_location="cpu",
+                    weights_only=True,
+                )
+                if not isinstance(state_dict, dict):
+                    raise ValueError("Parameter payload is not a state dictionary")
+                updates.append((update["num_samples"], state_dict))
+            except Exception as error:
+                return {
+                    "status": "error",
+                    "message": f"Invalid model parameters from {node_id}: {error}",
+                }
 
-        print(f"\n[AGGREGATION] {self.aggregation_method} started")
-        print(f"[CLIENT]      Hospital-A samples: {nA} (Weight: {wA})")
-        print(f"[CLIENT]      Hospital-B samples: {nB} (Weight: {wB})")
-        print(f"[AGGREGATION] Calculating weighted parameters: W_global = ({wA} * W_A) + ({wB} * W_B)...")
+        total_samples = sum(sample_count for sample_count, _ in updates)
+        if total_samples <= 0:
+            return {"status": "error", "message": "Cannot aggregate with no training samples."}
 
-        self.emit_event("AGGREGATION_STARTED", {
-            "method": self.aggregation_method,
-            "node_A_samples": nA,
-            "node_A_weight": wA,
-            "node_B_samples": nB,
-            "node_B_weight": wB,
-            "total_samples": N,
-        })
+        first_state = updates[0][1]
+        if set(first_state) != set(updates[1][1]):
+            return {"status": "error", "message": "Hospital model state dictionaries do not match."}
 
-        time.sleep(2.0)  # Real aggregation computation time
+        try:
+            aggregated = {}
+            for key in first_state:
+                tensors = [state[key] for _, state in updates]
+                shapes = {tuple(tensor.shape) for tensor in tensors}
+                if len(shapes) != 1:
+                    return {"status": "error", "message": f"Tensor shape mismatch for {key}."}
+                aggregated[key] = sum(
+                    tensor * (sample_count / total_samples)
+                    for (sample_count, _), tensor in zip(updates, tensors)
+                )
+        except Exception as error:
+            return {"status": "error", "message": f"FedAvg failed: {error}"}
 
-        # Compute next model version
-        prev_version = self.global_version
-        next_version_num = int(prev_version.replace("v", "")) + 1
-        new_version = f"v{next_version_num}"
-
-        # Evaluate on central evaluation set (Section 23)
-        prev_acc = self.validation_accuracy or 84.5
-        new_acc = round(prev_acc + np.random.uniform(1.2, 2.5), 1)
-        new_loss = round(max(0.18, (self.validation_loss or 0.36) - 0.035), 4)
-
-        # Save model checkpoint
+        previous_version = self.global_version
+        next_number = int(previous_version.replace("v", "")) + 1 if previous_version.startswith("v") else 2
+        new_version = f"v{next_number}"
+        round_number = self.current_round
         checkpoint_name = f"federated_model_{new_version}.pth"
         checkpoint_path = CHECKPOINTS_DIR / checkpoint_name
-
-        # Create or save realistic checkpoint file
-        torch.save({
+        checkpoint = {
             "version": new_version,
-            "round": self.current_round,
-            "accuracy": new_acc,
-            "loss": new_loss,
-            "aggregation": self.aggregation_method,
+            "round": round_number,
+            "aggregation": "FedAvg",
+            "num_clients": 2,
+            "total_samples": total_samples,
             "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-        }, str(checkpoint_path))
+            "model_state_dict": aggregated,
+        }
+        torch.save(checkpoint, str(checkpoint_path))
 
-        # Copy to active federated_model.pth for doctor inference
-        try:
-            active_model = MODEL_DIR / "models" / "federated_model.pth"
-            shutil.copyfile(str(checkpoint_path), str(active_model))
-        except Exception:
-            pass
+        active_model = MODEL_DIR / "models" / "federated_model.pth"
+        torch.save(aggregated, str(active_model))
 
-        print(f"[MODEL]       Global Model {prev_version} → {new_version}")
-        print(f"[CHECKPOINT]  Saved {checkpoint_name} (Val Accuracy: {new_acc}%, Change: +{round(new_acc - prev_acc, 1)}%) ✓")
+        weighted_loss = sum(
+            update["loss"] * update["num_samples"]
+            for update in self.round_updates.values()
+        ) / total_samples
+        weighted_accuracy = sum(
+            update["accuracy"] * update["num_samples"]
+            for update in self.round_updates.values()
+        ) / total_samples
 
-        self.emit_event("AGGREGATION_COMPLETED", {
-            "previous_version": prev_version,
-            "new_version": new_version,
-            "validation_accuracy": new_acc,
-            "accuracy_change": round(new_acc - prev_acc, 1),
-            "validation_loss": new_loss,
-            "checkpoint": checkpoint_name,
-        })
-
-        self.emit_event("GLOBAL_MODEL_UPDATED", {
-            "version": new_version,
-            "checkpoint": checkpoint_name,
-            "status": "Ready for Distribution",
-        })
-
-        # Distribute new model back to Hospital A and B (Section 24)
-        print(f"[DISTRIBUTION] Sending Global Model {new_version} to edge hospital nodes...")
-        print(f"[DISTRIBUTION] Hospital-A ✓")
-        print(f"[DISTRIBUTION] Hospital-B ✓")
-
-        self.emit_event("GLOBAL_MODEL_DISTRIBUTED", {
-            "version": new_version,
-            "nodes": ["node_A", "node_B"],
-            "status": f"Global Model {new_version} received by Hospital A and B.",
-        })
-
-        # Finalize round
         with self.lock:
             self.global_version = new_version
-            self.validation_accuracy = new_acc
-            self.validation_loss = new_loss
-
-            # Update nodes' model version
+            self.validation_loss = round(weighted_loss, 4)
+            self.validation_accuracy = round(weighted_accuracy, 4)
             self.nodes["node_A"]["model_version"] = new_version
             self.nodes["node_B"]["model_version"] = new_version
-
-            # Add to Model Registry
-            for m in self.model_registry:
-                m["status"] = "Previous"
             self.model_registry.insert(0, {
                 "version": new_version,
-                "round": self.current_round,
-                "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                "round": round_number,
+                "timestamp": checkpoint["timestamp"],
                 "status": "Current",
-                "accuracy": new_acc,
-                "loss": new_loss,
-                "aggregation": self.aggregation_method,
+                "accuracy": weighted_accuracy,
+                "loss": weighted_loss,
+                "aggregation": "FedAvg",
                 "checkpoint": checkpoint_name,
                 "clients": 2,
-                "samples": N,
+                "samples": total_samples,
             })
-
-            # Add to Round History
             self.round_history.insert(0, {
-                "round": self.current_round,
+                "round": round_number,
                 "round_id": self.round_id,
-                "model_transition": f"{prev_version} → {new_version}",
+                "model_transition": f"{previous_version} → {new_version}",
                 "clients": "2 / 2",
-                "total_samples": N,
-                "aggregation": self.aggregation_method,
+                "total_samples": total_samples,
+                "aggregation": "FedAvg",
                 "status": "Completed",
-                "validation_accuracy": new_acc,
-                "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                "validation_accuracy": weighted_accuracy,
+                "timestamp": checkpoint["timestamp"],
             })
-
             self.stage = "completed"
             self.is_active = False
 
-        self.emit_event("ROUND_COMPLETED", {
-            "round": self.current_round,
-            "round_id": self.round_id,
-            "final_model": new_version,
-            "status": "ROUND COMPLETED SUCCESSFULLY",
+        self.emit_event("AGGREGATION_COMPLETED", {
+            "method": "FedAvg",
+            "previous_version": previous_version,
+            "new_version": new_version,
+            "checkpoint": checkpoint_name,
+            "total_samples": total_samples,
+        })
+        self.emit_event("GLOBAL_MODEL_DISTRIBUTED", {
+            "version": new_version,
+            "nodes": ["node_A", "node_B"],
+            "checkpoint": checkpoint_name,
         })
 
-        print(f"[ROUND]       FL Round #{self.current_round} completed successfully.")
-        print("=" * 58 + "\n")
-
         with self.lock:
+            self.round_updates = {}
             self.current_round += 1
+
+        return {
+            "version": new_version,
+            "checkpoint": checkpoint_name,
+            "weighted_accuracy": weighted_accuracy,
+            "weighted_loss": weighted_loss,
+            "total_samples": total_samples,
+        }
 
     def cancel_round(self) -> Dict[str, Any]:
         """Cancels an active round if requested by admin."""

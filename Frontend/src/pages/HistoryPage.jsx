@@ -1,9 +1,45 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import HistoryTable from '../components/HistoryTable';
-import { History, Download, FileSpreadsheet, X, Eye, Calendar, AlertTriangle, CheckCircle2 } from 'lucide-react';
+import { History, Download, FileSpreadsheet, X, Eye, Calendar, AlertTriangle, CheckCircle2, GitCompareArrows } from 'lucide-react';
+import { fetchPatientVisits, reviewPatientVisit } from '../services/api';
+import { useAuth } from '../context/AuthContext';
 
 export default function HistoryPage({ historyData, onViewScanDetail }) {
+  const { user, role } = useAuth();
   const [selectedRecordModal, setSelectedRecordModal] = useState(null);
+  const [patientFilter, setPatientFilter] = useState('');
+  const [visits, setVisits] = useState([]);
+  const [visitError, setVisitError] = useState('');
+  const [visitReview, setVisitReview] = useState({
+    visitId: '',
+    validatedChange: 'unchanged',
+    observations: '',
+  });
+
+  useEffect(() => {
+    const selectedHash =
+      role === 'patient'
+        ? (user?.patient_hash || '')
+        : (patientFilter || '');
+    if (!selectedHash) {
+      setVisits([]);
+      return;
+    }
+    let cancelled = false;
+    fetchPatientVisits(selectedHash, role, role === 'patient' ? selectedHash : null).then((response) => {
+      if (cancelled) return;
+      if (response.success) {
+        setVisits(response.data);
+        setVisitError('');
+      } else {
+        setVisits([]);
+        setVisitError(response.error || 'Unable to load patient timeline.');
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [patientFilter, role, user?.patient_hash]);
 
   const handleExportCSV = () => {
     const headers = ["Scan Date", "Patient ID", "Patient Name", "Result", "Confidence (%)", "Stage", "Doctor Confirmed"];
@@ -60,6 +96,140 @@ export default function HistoryPage({ historyData, onViewScanDetail }) {
         historyData={historyData}
         onViewDetail={handleViewDetail}
       />
+
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 space-y-5">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
+              <GitCompareArrows className="w-5 h-5 text-sky-600" />
+              Treatment Progress & Visit Comparison
+            </h2>
+            <p className="text-xs text-slate-500 mt-1">
+              Chronological clinical visits. AI findings support review and never confirm recovery alone.
+            </p>
+          </div>
+          {role !== 'patient' && (
+            <input
+              value={patientFilter}
+              onChange={(event) => setPatientFilter(event.target.value)}
+              placeholder="Enter patient hash"
+              className="text-xs px-3 py-2 rounded-xl border border-slate-300 font-mono"
+            />
+          )}
+        </div>
+
+        {visitError && (
+          <div className="text-xs text-rose-700 bg-rose-50 border border-rose-200 rounded-xl p-3">
+            {visitError}
+          </div>
+        )}
+
+        {visits.length === 0 ? (
+          <p className="text-xs text-slate-500">
+            {patientFilter || role === 'patient' ? 'No recorded visits for this patient.' : 'Select or enter a patient to view visit history.'}
+          </p>
+        ) : (
+          <div className="space-y-4">
+            {[...visits].reverse().map((visit) => (
+              <div key={visit.visit_id} className="border border-slate-200 rounded-xl p-4 space-y-4">
+                <div className="flex flex-col sm:flex-row sm:justify-between gap-2">
+                  <div>
+                    <div className="text-sm font-bold text-slate-900">{visit.visit_date}</div>
+                    <div className="text-xs text-slate-500">
+                      AI: {visit.ai_prediction || 'Not recorded'} | Confidence: {visit.ai_confidence ? `${(visit.ai_confidence * 100).toFixed(1)}%` : 'N/A'}
+                    </div>
+                  </div>
+                  <span className="text-xs font-semibold rounded-full px-3 py-1 border border-slate-200 self-start">
+                    {visit.doctor_review_status === 'reviewed'
+                      ? `Reviewed: ${visit.doctor_validated_change}`
+                      : 'Pending doctor review'}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="bg-slate-50 rounded-xl p-3">
+                    <div className="text-[11px] font-bold text-slate-500 mb-2">Previous Visit</div>
+                    {visit.previous_visit ? (
+                      <div className="text-xs space-y-1">
+                        <div>{visit.previous_visit.visit_date}</div>
+                        <div>{visit.previous_visit.ai_prediction || 'No AI record'} — Stage {visit.previous_visit.treatment_stage || 'N/A'}</div>
+                        {visit.previous_visit.heatmap_image_path && (
+                          <img src={visit.previous_visit.heatmap_image_path} alt="Previous Grad-CAM" className="mt-2 w-full max-h-48 object-contain rounded-lg border" />
+                        )}
+                      </div>
+                    ) : (
+                      <div className="text-xs text-slate-400">First recorded visit</div>
+                    )}
+                  </div>
+                  <div className="bg-slate-50 rounded-xl p-3">
+                    <div className="text-[11px] font-bold text-slate-500 mb-2">Current Visit</div>
+                    <div className="text-xs space-y-1">
+                      <div>{visit.visit_date}</div>
+                      <div>{visit.ai_prediction || 'No AI record'} — Stage {visit.treatment_stage || 'N/A'}</div>
+                      {visit.heatmap_image_path && (
+                        <img src={visit.heatmap_image_path} alt="Current Grad-CAM" className="mt-2 w-full max-h-48 object-contain rounded-lg border" />
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {role === 'doctor' && visit.doctor_review_status !== 'reviewed' && (
+                  <div className="grid grid-cols-1 sm:grid-cols-4 gap-2 items-end">
+                    <select
+                      value={visitReview.visitId === visit.visit_id ? visitReview.validatedChange : 'unchanged'}
+                      onChange={(event) => setVisitReview({
+                        visitId: visit.visit_id,
+                        validatedChange: event.target.value,
+                        observations: visitReview.visitId === visit.visit_id ? visitReview.observations : '',
+                      })}
+                      className="text-xs px-3 py-2 border border-slate-300 rounded-xl"
+                    >
+                      <option value="improved">Improved</option>
+                      <option value="unchanged">Unchanged</option>
+                      <option value="worsened">Worsened</option>
+                    </select>
+                    <input
+                      value={visitReview.visitId === visit.visit_id ? visitReview.observations : ''}
+                      onChange={(event) => setVisitReview((current) => ({
+                        ...current,
+                        visitId: visit.visit_id,
+                        observations: event.target.value,
+                      }))}
+                      placeholder="Doctor observations"
+                      className="sm:col-span-2 text-xs px-3 py-2 border border-slate-300 rounded-xl"
+                    />
+                    <button
+                      onClick={async () => {
+                        const response = await reviewPatientVisit({
+                          visit_id: visit.visit_id,
+                          validated_change: visitReview.visitId === visit.visit_id ? visitReview.validatedChange : 'unchanged',
+                          doctor_observations: visitReview.visitId === visit.visit_id ? visitReview.observations : '',
+                          treatment_stage: visit.treatment_stage,
+                          doctor_email: user?.email || 'doctor',
+                          doctor_name: user?.name || 'Attending Clinician',
+                        }, role);
+                        if (response.success) {
+                          const refreshed = await fetchPatientVisits(
+                            visit.patient_hash,
+                            role,
+                            null,
+                          );
+                          if (refreshed.success) setVisits(refreshed.data);
+                        } else {
+                          setVisitError(response.error || 'Unable to review visit.');
+                        }
+                      }}
+                      className="text-xs px-3 py-2 rounded-xl bg-sky-600 text-white font-semibold"
+                    >
+                      Save Doctor Review
+                    </button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
 
       {/* Record Inspection Modal */}
       {selectedRecordModal && (

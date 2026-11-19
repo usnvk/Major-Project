@@ -93,10 +93,9 @@ export const predictXray = async (file, patientId = null, patientName = null, up
 
     if (ENABLE_MOCK_FALLBACK) {
       await new Promise((resolve) => setTimeout(resolve, 1200));
-
-      const isPositive = file ? file.name.toLowerCase().includes('pos') || Math.random() > 0.35 : true;
-      const confidence = isPositive ? Number((92 + Math.random() * 7.5).toFixed(1)) : Number((90 + Math.random() * 8).toFixed(1));
-      const stage = isPositive ? Math.floor(Math.random() * 3) + 1 : null;
+      const isPositive = false;
+      const confidence = 100;
+      const stage = null;
       const predictionId = `pred_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
       const isDcm = file ? file.name.toLowerCase().endsWith('.dcm') : false;
 
@@ -350,6 +349,52 @@ export const fetchScans = async (role = 'doctor', patientHash = null) => {
     return {
       success: false,
       error: error?.message,
+    };
+  }
+};
+
+export const fetchPatientVisits = async (patientHash, role = 'doctor', viewerPatientHash = null) => {
+  try {
+    let url = `/patient-visits/${encodeURIComponent(patientHash)}?role=${encodeURIComponent(role)}`;
+    if (viewerPatientHash) {
+      url += `&viewer_patient_hash=${encodeURIComponent(viewerPatientHash)}`;
+    }
+    const response = await apiClient.get(url);
+    return { success: true, data: response.data };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.response?.data?.detail || error.message,
+    };
+  }
+};
+
+export const createPatientVisit = async (payload, role = 'doctor') => {
+  try {
+    const response = await apiClient.post(
+      `/patient-visits?role=${encodeURIComponent(role)}`,
+      payload,
+    );
+    return { success: true, data: response.data };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.response?.data?.detail || error.message,
+    };
+  }
+};
+
+export const reviewPatientVisit = async (payload, role = 'doctor') => {
+  try {
+    const response = await apiClient.post(
+      `/patient-visits/review?role=${encodeURIComponent(role)}`,
+      payload,
+    );
+    return { success: true, data: response.data };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.response?.data?.detail || error.message,
     };
   }
 };

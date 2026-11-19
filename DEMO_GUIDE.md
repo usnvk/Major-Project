@@ -6,6 +6,37 @@
 
 ---
 
+## Model and Dataset Provenance for Demonstration
+
+The default TB diagnostic backend uses the free public pretrained **BioMedCLIP-Distilled DenseNet-121** model:
+
+- Model card: https://huggingface.co/Ressshh/tb-conformal-distilled-densenet121
+- Local runtime artifact: `backend/models/tb_public.onnx`
+- License: MIT
+- Binary output: Normal vs. Tuberculosis
+- Published WHO TPP operating threshold: 0.4401
+
+This project integrates an existing pretrained public model; it does not claim to have trained this checkpoint locally. Federated Learning components in this repository demonstrate distributed training workflows, but the default `/predict` diagnosis uses the public pretrained ONNX model.
+
+To fine-tune the public checkpoint with the Kaggle dataset:
+
+1. Install Kaggle: `python -m pip install kaggle`
+2. Place the Kaggle API credential in `C:\Users\<name>\.kaggle\kaggle.json`
+3. Download and extract:
+   `kaggle datasets download -d tawsifurrahman/tuberculosis-tb-chest-xray-dataset --unzip -p C:\Users\<name>\Downloads\TB-Dataset`
+4. Ensure the extracted dataset has `Normal` and `Tuberculosis` folders.
+5. Run:
+   `python -m src.training.fine_tune_public_tb --dataset C:\Users\<name>\Downloads\TB-Dataset --checkpoint ..\..\backend\models\tb_public.pth --output ..\..\backend\models\tb_public_finetuned.onnx`
+6. Set `MODEL_PATH=backend/models/tb_public_finetuned.onnx` when launching the backend.
+
+Recommended public demo datasets:
+
+- **Montgomery County CXR Set:** 138 PA X-rays, with 80 normal and 58 TB-positive images. A filename suffix of `_0` indicates normal and `_1` indicates TB positive.
+- **Tawsifur Rahman TB Chest X-ray Database:** 4,200 publicly accessible images, including 700 TB-positive and 3,500 normal images.
+- **NLM Montgomery and Shenzhen CXR datasets:** Public sources used by the project's downloadable dataset preparation workflow.
+
+Stage labels shown after a positive TB result are **AI screening estimates** derived from model confidence. They are not confirmed radiological disease stages and must be reviewed by a physician. Diet, exercise, medication, and differential-disease suggestions are supporting educational guidance, not prescriptions.
+
 ## 📑 Table of Contents
 1. [Architecture & System Topology](#1-architecture--system-topology)
 2. [Quickstart: Launching the Platform](#2-quickstart-launching-the-platform)
