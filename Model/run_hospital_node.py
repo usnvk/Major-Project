@@ -80,7 +80,7 @@ BOLD = "\033[1m"
 RESET = "\033[0m"
 
 
-def post_json(url: str, data: dict, timeout: float = 3.0) -> Optional[dict]:
+def post_json(url: str, data: dict, timeout: float = 10.0) -> Optional[dict]:
     """Helper to send HTTP POST without external dependencies (urllib)."""
     try:
         req = urllib.request.Request(
@@ -91,11 +91,15 @@ def post_json(url: str, data: dict, timeout: float = 3.0) -> Optional[dict]:
         )
         with urllib.request.urlopen(req, timeout=timeout) as response:
             return json.loads(response.read().decode("utf-8"))
-    except Exception:
+    except Exception as _post_err:
+        # Only print for non-heartbeat URLs to avoid log spam
+        if "heartbeat" not in url and "events" not in url:
+            import sys as _sys
+            _sys.stderr.write(f"[POST_ERR] {url}: {_post_err}\n")
         return None
 
 
-def get_json(url: str, timeout: float = 3.0) -> Optional[dict]:
+def get_json(url: str, timeout: float = 10.0) -> Optional[dict]:
     """Helper to send HTTP GET without external dependencies."""
     try:
         req = urllib.request.Request(url, headers={"Accept": "application/json"})
@@ -638,6 +642,8 @@ def main():
                 time.sleep(1.2)
 
                 # Upload model parameters / metrics payload to Central Server
+                # Use large timeout: 45MB base64 upload over Wi-Fi can take 60-120s
+                print(f"[UPLOAD] Sending {update_size_mb} MB weight payload (timeout=180s)...")
                 upload_res = post_json(
                     f"{args.api_server}/api/fl/round/submit-update",
                     {
@@ -651,7 +657,10 @@ def main():
                         "weights_hash": weight_hash,
                         "parameters_base64": parameters_base64,
                     },
+                    timeout=180.0,
                 )
+                if upload_res is None:
+                    print(f"[UPLOAD] WARNING: submit-update timed out or failed — check server logs!")
 
                 print(f"[UPLOAD] Central Server accepted weight vector ✓")
                 next_version = f"v{current_round_num + 1}"
