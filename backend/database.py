@@ -78,6 +78,27 @@ def init_db() -> None:
                 trained_at TEXT,
                 FOREIGN KEY (prediction_id) REFERENCES predictions(prediction_id)
             );
+            CREATE TABLE IF NOT EXISTS hospitals (
+                hospital_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                address TEXT,
+                contact_email TEXT,
+                phone TEXT,
+                node_id TEXT UNIQUE,
+                status TEXT NOT NULL DEFAULT 'offline',
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS follow_ups (
+                follow_up_id TEXT PRIMARY KEY,
+                patient_hash TEXT NOT NULL,
+                visit_id TEXT,
+                doctor_email TEXT,
+                scheduled_at TEXT NOT NULL,
+                reason TEXT,
+                status TEXT NOT NULL DEFAULT 'scheduled',
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (visit_id) REFERENCES patient_visits(visit_id)
+            );
             CREATE TABLE IF NOT EXISTS patient_visits (
                 visit_id TEXT PRIMARY KEY,
                 patient_hash TEXT NOT NULL,
@@ -100,6 +121,31 @@ def init_db() -> None:
             );
             """
         )
+        users_sql_row = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='users'"
+        ).fetchone()
+        users_sql = users_sql_row["sql"] if users_sql_row else ""
+        if "'hospital'" not in users_sql:
+            connection.executescript(
+                """
+                ALTER TABLE users RENAME TO users_legacy;
+                CREATE TABLE users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    email TEXT UNIQUE NOT NULL,
+                    password_hash TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    role TEXT NOT NULL CHECK(role IN ('doctor', 'admin', 'patient', 'hospital')),
+                    license_number TEXT,
+                    patient_hash TEXT,
+                    hospital_node TEXT,
+                    created_at TEXT NOT NULL
+                );
+                INSERT INTO users (id, email, password_hash, name, role, license_number, patient_hash, hospital_node, created_at)
+                SELECT id, email, password_hash, name, role, license_number, patient_hash, hospital_node, created_at
+                FROM users_legacy;
+                DROP TABLE users_legacy;
+                """
+            )
         # Migrate predictions columns if existing db
         pred_columns = {
             row["name"] for row in connection.execute("PRAGMA table_info(predictions)")
@@ -178,6 +224,92 @@ def save_prediction(
                 datetime.now(timezone.utc).isoformat(),
             ),
         )
+
+
+def create_hospital(
+    hospital_id: str,
+    name: str,
+    address: str | None,
+    contact_email: str | None,
+    phone: str | None,
+    node_id: str,
+) -> dict[str, Any]:
+    with get_connection() as connection:
+        connection.execute(
+            """
+            INSERT OR REPLACE INTO hospitals
+            (hospital_id, name, address, contact_email, phone, node_id, status, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, 'offline', ?)
+            """,
+            (
+                hospital_id,
+                name,
+                address,
+                contact_email,
+                phone,
+                node_id,
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        row = connection.execute(
+            "SELECT * FROM hospitals WHERE hospital_id = ?",
+            (hospital_id,),
+        ).fetchone()
+    return dict(row)
+
+
+def get_hospitals() -> list[dict[str, Any]]:
+    with get_connection() as connection:
+        rows = connection.execute(
+            "SELECT * FROM hospitals ORDER BY created_at DESC"
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def schedule_follow_up(
+    follow_up_id: str,
+    patient_hash: str,
+    visit_id: str | None,
+    doctor_email: str | None,
+    scheduled_at: str,
+    reason: str | None,
+) -> dict[str, Any]:
+    with get_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO follow_ups
+            (follow_up_id, patient_hash, visit_id, doctor_email, scheduled_at, reason, status, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, 'scheduled', ?)
+            """,
+            (
+                follow_up_id,
+                patient_hash,
+                visit_id,
+                doctor_email,
+                scheduled_at,
+                reason,
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        row = connection.execute(
+            "SELECT * FROM follow_ups WHERE follow_up_id = ?",
+            (follow_up_id,),
+        ).fetchone()
+    return dict(row)
+
+
+def get_follow_ups(patient_hash: str | None = None) -> list[dict[str, Any]]:
+    with get_connection() as connection:
+        if patient_hash:
+            rows = connection.execute(
+                "SELECT * FROM follow_ups WHERE patient_hash = ? ORDER BY scheduled_at ASC",
+                (patient_hash,),
+            ).fetchall()
+        else:
+            rows = connection.execute(
+                "SELECT * FROM follow_ups ORDER BY scheduled_at ASC"
+            ).fetchall()
+    return [dict(row) for row in rows]
 
 
 def create_patient_visit(
@@ -472,8 +604,8 @@ def create_user(
     hospital_node: str | None = None,
 ) -> dict[str, Any]:
     """Registers a new user account with role validation."""
-    if role not in {"doctor", "admin", "patient"}:
-        raise ValueError("Invalid role; must be 'doctor', 'admin', or 'patient'.")
+    if role not in {"doctor", "admin", "patient", "hospital"}:
+        raise ValueError("Invalid role; must be 'doctor', 'admin', 'patient', or 'hospital'.")
 
     normalized_email = email.strip().lower()
     hashed = _hash_password(password)

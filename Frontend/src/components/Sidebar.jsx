@@ -38,6 +38,11 @@ export default function Sidebar({ activeTab, setActiveTab, isOpen, onCloseMobile
       { id: 'upload', label: 'Upload Radiograph', icon: UploadCloud },
       { id: 'history', label: 'My Clinical Records', icon: History },
     ];
+  } else if (role === 'hospital') {
+    navItems = [
+      { id: 'hospital-portal', label: 'Hospital Overview', icon: LayoutDashboard },
+      { id: 'federated-network', label: 'Federated Client', icon: Network },
+    ];
   } else {
     // Doctor
     navItems = [

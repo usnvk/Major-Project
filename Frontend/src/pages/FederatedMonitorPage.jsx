@@ -129,56 +129,13 @@ export default function FederatedMonitorPage() {
     }
   };
 
-  const rounds = metricsData?.rounds || [
-    { round: 1, accuracy: 61.2, loss: 0.721, epsilon: 0.42, delta: 1e-5, clients: 3 },
-    { round: 2, accuracy: 67.4, loss: 0.634, epsilon: 0.71, delta: 1e-5, clients: 3 },
-    { round: 3, accuracy: 72.1, loss: 0.578, epsilon: 0.98, delta: 1e-5, clients: 3 },
-    { round: 4, accuracy: 75.8, loss: 0.521, epsilon: 1.24, delta: 1e-5, clients: 2 },
-    { round: 5, accuracy: 78.86, loss: 0.443, epsilon: 1.71, delta: 1e-5, clients: 3 },
-  ];
+  const rounds = Array.isArray(metricsData?.rounds) ? metricsData.rounds : [];
 
   const currentIdx = activeRoundIdx !== null ? activeRoundIdx : rounds.length - 1;
   const currentRound = rounds[currentIdx] || rounds[rounds.length - 1];
   const isLive = metricsData?.source === 'live_cluster';
 
-  const hospitalNodes = metricsData?.client_stats || [
-    {
-      id: 'node_A',
-      name: 'Hospital Node A',
-      type: 'Urban TB Referral Center',
-      location: 'SIT District Hospital',
-      dataset_size: 3008,
-      tb_rate: '82.9% TB',
-      accuracy: 87.2,
-      loss: 0.338,
-      status: 'Active · Online',
-      color: '#0ea5e9',
-    },
-    {
-      id: 'node_B',
-      name: 'Hospital Node B',
-      type: 'Rural Primary Healthcare',
-      location: 'General Screening Clinic',
-      dataset_size: 4200,
-      tb_rate: '16.7% TB',
-      accuracy: 85.9,
-      loss: 0.351,
-      status: 'Active · Online',
-      color: '#8b5cf6',
-    },
-    {
-      id: 'node_C',
-      name: 'Hospital Node C',
-      type: 'Metropolitan Academic Center',
-      location: 'Medical Research Institute',
-      dataset_size: 7600,
-      tb_rate: '50.0% Balanced',
-      accuracy: 86.1,
-      loss: 0.344,
-      status: 'Active · Online',
-      color: '#10b981',
-    },
-  ];
+  const hospitalNodes = Array.isArray(metricsData?.client_stats) ? metricsData.client_stats : [];
 
   const accTrend = rounds.map((r) => (r.accuracy > 1 ? r.accuracy : +(r.accuracy * 100).toFixed(1)));
   const epsTrend = rounds.map((r) => r.epsilon);

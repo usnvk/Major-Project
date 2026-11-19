@@ -353,6 +353,62 @@ export const fetchScans = async (role = 'doctor', patientHash = null) => {
   }
 };
 
+export const fetchHospitals = async (role = 'admin') => {
+  try {
+    const response = await apiClient.get(`/hospitals?role=${encodeURIComponent(role)}`);
+    return { success: true, data: response.data };
+  } catch (error) {
+    return { success: false, error: error.response?.data?.detail || error.message };
+  }
+};
+
+export const createHospital = async (payload, role = 'admin') => {
+  try {
+    const response = await apiClient.post(`/hospitals?role=${encodeURIComponent(role)}`, payload);
+    return { success: true, data: response.data };
+  } catch (error) {
+    return { success: false, error: error.response?.data?.detail || error.message };
+  }
+};
+
+export const fetchFollowUps = async (patientHash = null, role = 'doctor') => {
+  try {
+    let url = `/follow-ups?role=${encodeURIComponent(role)}`;
+    if (patientHash) url += `&patient_hash=${encodeURIComponent(patientHash)}`;
+    const response = await apiClient.get(url);
+    return { success: true, data: response.data };
+  } catch (error) {
+    return { success: false, error: error.response?.data?.detail || error.message };
+  }
+};
+
+export const createFollowUp = async (payload, role = 'doctor') => {
+  try {
+    const response = await apiClient.post(`/follow-ups?role=${encodeURIComponent(role)}`, payload);
+    return { success: true, data: response.data };
+  } catch (error) {
+    return { success: false, error: error.response?.data?.detail || error.message };
+  }
+};
+
+export const fetchUsers = async (role = 'admin') => {
+  try {
+    const response = await apiClient.get(`/users?role=${encodeURIComponent(role)}`);
+    return { success: true, data: response.data };
+  } catch (error) {
+    return { success: false, error: error.response?.data?.detail || error.message };
+  }
+};
+
+export const fetchNotifications = async (role = 'doctor') => {
+  try {
+    const response = await apiClient.get(`/notifications?role=${encodeURIComponent(role)}`);
+    return { success: true, data: response.data };
+  } catch (error) {
+    return { success: false, error: error.response?.data?.detail || error.message };
+  }
+};
+
 export const fetchPatientVisits = async (patientHash, role = 'doctor', viewerPatientHash = null) => {
   try {
     let url = `/patient-visits/${encodeURIComponent(patientHash)}?role=${encodeURIComponent(role)}`;
@@ -473,6 +529,18 @@ export const fetchFLLiveStatus = async () => {
 export const fetchFLNodes = async () => {
   try {
     const response = await apiClient.get('/api/fl/nodes');
+    return { success: true, data: response.data };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.response?.data?.detail || error.message,
+    };
+  }
+};
+
+export const fetchFLCurrentModel = async () => {
+  try {
+    const response = await apiClient.get('/api/fl/model/current');
     return { success: true, data: response.data };
   } catch (error) {
     return {

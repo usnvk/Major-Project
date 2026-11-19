@@ -39,6 +39,10 @@ try:
         create_patient_visit,
         get_patient_visits,
         review_patient_visit,
+        create_hospital,
+        get_hospitals,
+        schedule_follow_up,
+        get_follow_ups,
         init_db,
         log_audit_event,
         save_feedback,
@@ -74,6 +78,10 @@ except ImportError:
         create_patient_visit,
         get_patient_visits,
         review_patient_visit,
+        create_hospital,
+        get_hospitals,
+        schedule_follow_up,
+        get_follow_ups,
         init_db,
         log_audit_event,
         save_feedback,
@@ -93,7 +101,7 @@ MODELS_DIR = BACKEND_DIR / "models"
 MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
 MODEL_PATH = Path(
-    os.getenv("MODEL_PATH", str(MODELS_DIR / "tb_public.onnx"))
+    os.getenv("MODEL_PATH", str(MODELS_DIR / "tb_public.pth"))
 )
 VALIDATOR_MODEL_PATH = Path(
     os.getenv("VALIDATOR_MODEL_PATH", str(MODELS_DIR / "chest_xray_validator.pth"))
@@ -240,6 +248,23 @@ class PatientVisitReviewInput(BaseModel):
     treatment_stage: int | None = Field(default=None, ge=1, le=4)
     doctor_email: str = "doctor"
     doctor_name: str = "Attending Clinician"
+
+
+class HospitalCreateInput(BaseModel):
+    hospital_id: str = Field(min_length=1)
+    name: str = Field(min_length=1)
+    address: str | None = None
+    contact_email: str | None = None
+    phone: str | None = None
+    node_id: str = Field(min_length=1)
+
+
+class FollowUpCreateInput(BaseModel):
+    patient_hash: str = Field(min_length=1)
+    visit_id: str | None = None
+    doctor_email: str | None = None
+    scheduled_at: str = Field(min_length=1)
+    reason: str | None = None
 
 
 def get_stage_from_confidence(confidence: float) -> int:
@@ -416,6 +441,82 @@ def clinical_stats() -> dict[str, Any]:
 def list_scans(role: str = "doctor", patient_hash: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
     """Returns real scan records from SQLite, enforcing patient data isolation."""
     return get_scans_by_role(role=role, patient_hash=patient_hash, limit=limit)
+
+
+@app.post("/hospitals")
+def register_hospital(data: HospitalCreateInput, role: str = "admin") -> dict[str, Any]:
+    if role != "admin":
+        raise HTTPException(status_code=403, detail="Only administrators can register hospitals.")
+    return create_hospital(
+        hospital_id=data.hospital_id,
+        name=data.name,
+        address=data.address,
+        contact_email=data.contact_email,
+        phone=data.phone,
+        node_id=data.node_id,
+    )
+
+
+@app.get("/hospitals")
+def list_hospitals(role: str = "admin") -> list[dict[str, Any]]:
+    if role not in {"admin", "doctor", "hospital"}:
+        raise HTTPException(status_code=403, detail="Insufficient role.")
+    return get_hospitals()
+
+
+@app.get("/users")
+def list_users(role: str = "admin") -> list[dict[str, Any]]:
+    if role != "admin":
+        raise HTTPException(status_code=403, detail="Only administrators can manage users.")
+    return get_all_users()
+
+
+@app.post("/follow-ups")
+def add_follow_up(data: FollowUpCreateInput, role: str = "doctor") -> dict[str, Any]:
+    if role not in {"doctor", "admin"}:
+        raise HTTPException(status_code=403, detail="Only doctors or administrators can schedule follow-ups.")
+    return schedule_follow_up(
+        follow_up_id=str(uuid.uuid4()),
+        patient_hash=data.patient_hash,
+        visit_id=data.visit_id,
+        doctor_email=data.doctor_email,
+        scheduled_at=data.scheduled_at,
+        reason=data.reason,
+    )
+
+
+@app.get("/follow-ups")
+def list_follow_ups(patient_hash: str | None = None, role: str = "doctor") -> list[dict[str, Any]]:
+    if role not in {"doctor", "admin", "patient"}:
+        raise HTTPException(status_code=403, detail="Insufficient role.")
+    return get_follow_ups(patient_hash)
+
+
+@app.get("/notifications")
+def notifications(role: str = "doctor") -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    stats = get_clinical_stats()
+    if stats["pendingReviews"] > 0:
+        items.append({
+            "type": "pending_review",
+            "severity": "warning",
+            "message": f"{stats['pendingReviews']} chest X-ray reviews await doctor confirmation.",
+        })
+    for follow_up in get_follow_ups():
+        if follow_up["status"] == "scheduled":
+            items.append({
+                "type": "follow_up",
+                "severity": "info",
+                "message": f"Follow-up scheduled for {follow_up['patient_hash']} at {follow_up['scheduled_at']}.",
+            })
+    for node in fl_orchestrator.nodes.values():
+        if node["status"] != "online":
+            items.append({
+                "type": "client_disconnected",
+                "severity": "warning",
+                "message": f"{node['name']} is offline.",
+            })
+    return items
 
 
 @app.post("/patient-visits")

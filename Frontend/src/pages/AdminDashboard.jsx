@@ -134,7 +134,7 @@ export default function AdminDashboard({ onNavigate }) {
     pollFLData();
   };
 
-  const currentGlobalVersion = flStatus?.global_model_version || 'v2.1';
+  const currentGlobalVersion = flStatus?.global_model_version || 'v1';
   const currentRoundNum = flStatus?.current_round || 1;
   const isRoundActive = Boolean(flStatus?.is_active);
 
@@ -142,7 +142,7 @@ export default function AdminDashboard({ onNavigate }) {
     name: 'Hospital A (Urban Referral)',
     status: 'offline',
     model_version: currentGlobalVersion,
-    dataset_size: 120,
+    dataset_size: 0,
     last_loss: null,
     last_acc: null,
   };
@@ -151,7 +151,7 @@ export default function AdminDashboard({ onNavigate }) {
     name: 'Hospital B (Rural Clinic)',
     status: 'offline',
     model_version: currentGlobalVersion,
-    dataset_size: 120,
+    dataset_size: 0,
     last_loss: null,
     last_acc: null,
   };

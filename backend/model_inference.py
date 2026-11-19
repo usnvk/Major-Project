@@ -198,6 +198,67 @@ class GradCAMPlusPlusExtractor:
         self._bwd_handle.remove()
 
 
+class DenseNetGradCAM:
+    def __init__(self, model: nn.Module) -> None:
+        self.model = model
+        self.activations: torch.Tensor | None = None
+        target = model.backbone.features.norm5
+        self.fwd = target.register_forward_hook(self._save_activation)
+
+    def _save_activation(self, _module, _inputs, output):
+        self.activations = output
+
+    def generate(self, tensor: torch.Tensor, class_id: int, original_image: Image.Image) -> dict[str, Any]:
+        self.model.zero_grad()
+        logits = self.model(tensor)
+        if self.activations is None:
+            return {"heatmap_base64": None, "bounding_boxes": []}
+        gradients = torch.autograd.grad(
+            logits[0, class_id],
+            self.activations,
+            retain_graph=True,
+            create_graph=False,
+        )[0]
+
+        weights = gradients.mean(dim=(2, 3), keepdim=True)
+        cam = functional.relu((weights * self.activations).sum(dim=1, keepdim=True))
+        cam -= cam.min()
+        cam /= cam.max() + 1e-7
+        cam_np = functional.interpolate(
+            cam,
+            size=(224, 224),
+            mode="bilinear",
+            align_corners=False,
+        ).squeeze().detach().cpu().numpy()
+
+        heatmap_bgr = cv2.applyColorMap(np.uint8(255 * cam_np), cv2.COLORMAP_JET)
+        heatmap_rgb = cv2.cvtColor(heatmap_bgr, cv2.COLOR_BGR2RGB).astype(np.float32)
+        original = np.array(original_image.convert("RGB").resize((224, 224), Image.LANCZOS), dtype=np.float32)
+        overlay = np.clip(0.55 * original + 0.45 * heatmap_rgb, 0, 255).astype(np.uint8)
+        buffer = io.BytesIO()
+        Image.fromarray(overlay).save(buffer, format="PNG")
+        encoded = base64.b64encode(buffer.getvalue()).decode("utf-8")
+
+        gray = np.uint8(255 * cam_np)
+        _, thresh = cv2.threshold(gray, 140, 255, cv2.THRESH_BINARY)
+        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        boxes = []
+        for contour in contours:
+            if cv2.contourArea(contour) > 120:
+                x, y, width, height = cv2.boundingRect(contour)
+                boxes.append({
+                    "x": int(x),
+                    "y": int(y),
+                    "width": int(width),
+                    "height": int(height),
+                    "relative_area": round(float(cv2.contourArea(contour)) / (224 * 224), 4),
+                })
+        return {"heatmap_base64": f"data:image/png;base64,{encoded}", "bounding_boxes": boxes}
+
+    def remove_hooks(self) -> None:
+        self.fwd.remove()
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Main Inference Class
 # ─────────────────────────────────────────────────────────────────────────────
@@ -219,7 +280,7 @@ class ChestXRayInference:
         self._tb_input_name: str | None = None
         self._validator_model: nn.Module | None = None
         self._transform = _transform()
-        self.tb_threshold = 0.4401
+        self.tb_threshold = 0.15
 
     def _load_models(self) -> None:
         if self.tb_model_path.suffix.lower() == ".onnx":
@@ -255,9 +316,9 @@ class ChestXRayInference:
                 compatible = {}
                 for key, value in state_dict.items():
                     if key.startswith("backbone.features."):
-                        compatible[key[len("backbone."):] ] = value
+                        compatible[key] = value
                     elif key.startswith("backbone.classifier.1."):
-                        compatible["backbone.classifier." + key.rsplit(".", 1)[1]] = value
+                        compatible[key] = value
                 model.load_state_dict(compatible, strict=False)
                 model.eval()
                 self._tb_model = model
@@ -298,22 +359,28 @@ class ChestXRayInference:
         else:
             assert self._tb_model is not None
             self._tb_model.eval()
-            extractor = GradCAMPlusPlusExtractor(self._tb_model)
-            try:
-                logits = self._tb_model(tensor)
-                probs = functional.softmax(logits, dim=1)[0]
-                class_id = int(torch.argmax(probs).item())
-                confidence = float(probs[class_id].item())
-
+            logits = self._tb_model(tensor)
+            probs = functional.softmax(logits, dim=1)[0]
+            tb_probability = float(probs[1].item())
+            if isinstance(self._tb_model, PublicTBDenseNet):
+                class_id = 1 if tb_probability >= self.tb_threshold else 0
+                confidence = tb_probability if class_id == 1 else float(probs[0].item())
                 if class_id == 1:
-                    cam_result = extractor.generate(tensor, class_id, image)
-                    heatmap_base64 = cam_result["heatmap_base64"]
-                    bounding_boxes = cam_result["bounding_boxes"]
+                    extractor = DenseNetGradCAM(self._tb_model)
+                    try:
+                        cam = extractor.generate(tensor, class_id, image)
+                        heatmap_base64 = cam["heatmap_base64"]
+                        bounding_boxes = cam["bounding_boxes"]
+                    finally:
+                        extractor.remove_hooks()
                 else:
                     heatmap_base64 = None
                     bounding_boxes = []
-            finally:
-                extractor.remove_hooks()
+            else:
+                class_id = int(torch.argmax(probs).item())
+                confidence = float(probs[class_id].item())
+                heatmap_base64 = None
+                bounding_boxes = []
 
         return {
             "status": "ACCEPTED",

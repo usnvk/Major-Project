@@ -9,6 +9,7 @@ import UploadPage from './pages/UploadPage';
 import ResultPage from './pages/ResultPage';
 import HistoryPage from './pages/HistoryPage';
 import FederatedMonitorPage from './pages/FederatedMonitorPage';
+import HospitalDashboard from './pages/HospitalDashboard';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { fetchScans } from './services/api';
 
@@ -30,6 +31,8 @@ function AppContent() {
       setActiveTab('admin-panel');
     } else if (role === 'patient') {
       setActiveTab('patient-portal');
+    } else if (role === 'hospital') {
+      setActiveTab('hospital-portal');
     } else {
       setActiveTab('dashboard');
     }
@@ -45,6 +48,10 @@ function AppContent() {
     } else if (role === 'patient') {
       if (activeTab !== 'patient-portal' && activeTab !== 'upload' && activeTab !== 'result' && activeTab !== 'history') {
         setActiveTab('patient-portal');
+      }
+    } else if (role === 'hospital') {
+      if (activeTab !== 'hospital-portal' && activeTab !== 'federated-network') {
+        setActiveTab('hospital-portal');
       }
     } else {
       // doctor
@@ -164,6 +171,10 @@ function AppContent() {
             />
           )}
 
+          {role === 'hospital' && activeTab === 'hospital-portal' && (
+            <HospitalDashboard />
+          )}
+
           {/* ── Scans Ingestion (Doctor & Patient) ── */}
           {(role === 'doctor' || role === 'patient') && activeTab === 'upload' && (
             <UploadPage
@@ -180,7 +191,7 @@ function AppContent() {
           )}
 
           {/* ── Federated Telemetry (Doctor & Admin) ── */}
-          {(role === 'doctor' || role === 'admin') &&
+          {(role === 'doctor' || role === 'admin' || role === 'hospital') &&
             (activeTab === 'federated-network' || activeTab === 'fl-monitor') && (
               <FederatedMonitorPage />
             )}

@@ -56,8 +56,8 @@ def main() -> None:
     parser.add_argument("--checkpoint", default="../../backend/models/tb_public.pth")
     parser.add_argument("--output", default="../../backend/models/tb_public_finetuned.onnx")
     parser.add_argument("--epochs", type=int, default=10)
-    parser.add_argument("--batch-size", type=int, default=16)
-    parser.add_argument("--learning-rate", type=float, default=1e-5)
+    parser.add_argument("--batch-size", type=int, default=24)
+    parser.add_argument("--learning-rate", type=float, default=3e-4)
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
@@ -103,6 +103,8 @@ def main() -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = PublicTBDenseNet().to(device)
     load_public_checkpoint(model, Path(args.checkpoint).resolve())
+    for parameter in model.backbone.features.parameters():
+        parameter.requires_grad = False
     criterion = nn.CrossEntropyLoss(weight=torch.tensor(class_weights, dtype=torch.float32, device=device))
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=1e-4)
 
