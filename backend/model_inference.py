@@ -46,7 +46,7 @@ def _load_state_dict(path: Path, is_validator: bool = False) -> nn.Module:
     model = _resnet18()
     loaded = torch.load(path, map_location="cpu", weights_only=True)
     state_dict = loaded.get("model_state_dict", loaded) if isinstance(loaded, dict) else loaded
-    model.load_state_dict(state_dict)
+    model.load_state_dict(state_dict, strict=False)
     model.eval()
     return model
 
@@ -337,7 +337,7 @@ class ChestXRayInference:
                 else:
                     # Native ResNet-18 checkpoint
                     model = _resnet18()
-                    model.load_state_dict(state_dict)
+                    model.load_state_dict(state_dict, strict=False)
                     model.eval()
                     self._tb_model = model
                     self._model_type = "resnet18"
