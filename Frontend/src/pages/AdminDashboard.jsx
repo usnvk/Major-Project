@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   ShieldCheck,
   Activity,
@@ -44,24 +44,34 @@ export default function AdminDashboard({ onNavigate }) {
   const [loading, setLoading] = useState(true);
   const [startingRound, setStartingRound] = useState(false);
   const [statusMsg, setStatusMsg] = useState('');
+  const pollCountRef = useRef(0);
 
   const pollFLData = async () => {
     try {
-      const [statusRes, nodesRes, modelsRes, roundsRes, eventsRes] = await Promise.all([
+      pollCountRef.current += 1;
+      // Fast path: Always poll status & real-time events for instant step transitions
+      const [statusRes, eventsRes] = await Promise.all([
         fetchFLLiveStatus(),
-        fetchFLNodes(),
-        fetchFLModels(),
-        fetchFLRounds(),
         fetchFLEvents(),
       ]);
       if (statusRes.success) {
         setFlStatus(statusRes.data);
         if (statusRes.data.is_active) setIsModalOpen(true);
       }
-      if (nodesRes.success) setFlNodes(nodesRes.data);
-      if (modelsRes.success) setFlModels(modelsRes.data);
-      if (roundsRes.success) setFlRounds(roundsRes.data);
       if (eventsRes.success) setFlEvents(eventsRes.data);
+
+      // Periodically or on completion, poll heavier collections (nodes, models, history)
+      const isCompleted = statusRes.data?.stage === 'completed';
+      if (pollCountRef.current % 3 === 1 || isCompleted) {
+        const [nodesRes, modelsRes, roundsRes] = await Promise.all([
+          fetchFLNodes(),
+          fetchFLModels(),
+          fetchFLRounds(),
+        ]);
+        if (nodesRes.success) setFlNodes(nodesRes.data);
+        if (modelsRes.success) setFlModels(modelsRes.data);
+        if (roundsRes.success) setFlRounds(roundsRes.data);
+      }
     } catch (err) {
       console.warn('Error polling FL data:', err);
     }

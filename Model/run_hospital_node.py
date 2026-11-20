@@ -150,7 +150,7 @@ class HospitalHeartbeatDaemon(threading.Thread):
                 "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             }
             post_json(f"{self.api_url}/api/fl/node/heartbeat", payload)
-            time.sleep(3.0)
+            time.sleep(5.0)
 
     def stop(self):
         self.running = False
@@ -591,7 +591,8 @@ def main():
                         },
                     )
 
-                    time.sleep(batch_delay)
+                    if b_idx + 1 < batch_limit:
+                        time.sleep(batch_delay)
 
                 final_loss = round(running_loss / max(1, batch_limit), 4)
                 final_acc = round((correct / max(1, total)) * 100, 1)
@@ -612,17 +613,15 @@ def main():
                 heartbeat_daemon.last_acc = final_acc
                 heartbeat_daemon.dp_epsilon = calculated_epsilon
 
-                # 6. Extract Trained Weights and Serialize Vector
+                # 6. Extract Trained Weights and Serialize Vector efficiently
                 print(f"\n[WEIGHTS] Extracting updated PyTorch model parameters...")
-                trained_ndarrays = [p.detach().cpu().numpy() for p in model.parameters() if p.requires_grad]
-                total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-                update_size_mb = calculate_serialized_size_mb(trained_ndarrays)
-
                 state_buffer = io.BytesIO()
                 torch.save(model.state_dict(), state_buffer)
                 param_bytes = state_buffer.getvalue()
+                update_size_mb = round(len(param_bytes) / (1024 * 1024), 2)
                 weight_hash = hashlib.sha256(param_bytes).hexdigest()[:16]
                 parameters_base64 = base64.b64encode(param_bytes).decode("ascii")
+                total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 
                 print(f"  • Model Architecture: ResNet-18 ({total_params:,} parameters)")
                 print(f"  • Serialized Weights: {update_size_mb} MB")
@@ -644,11 +643,6 @@ def main():
                 )
 
                 print(f"\n[UPLOAD] Transmitting parameter vector ({update_size_mb} MB) to Central Server...")
-                time.sleep(1.2)
-
-                # Upload model parameters / metrics payload to Central Server
-                # Use large timeout: 45MB base64 upload over Wi-Fi can take 60-120s
-                print(f"[UPLOAD] Sending {update_size_mb} MB weight payload (timeout=180s)...")
                 upload_res = post_json(
                     f"{args.api_server}/api/fl/round/submit-update",
                     {
@@ -672,11 +666,11 @@ def main():
                 heartbeat_daemon.model_version = next_version
                 print(f"\n[FL] Waiting for Central Server to execute FedAvg aggregation and distribute Global Model {next_version}...")
 
-                # Wait for round to finalize at server
-                time.sleep(5.0)
+                # Immediate fast transition for next round
+                time.sleep(0.5)
                 print(f"[FL] Round #{current_round_num} successfully concluded! Listening for next round...\n")
 
-            time.sleep(1.5)
+            time.sleep(0.8)
 
     except KeyboardInterrupt:
         print(f"\n[{args.node_id}] Shutting down client...")

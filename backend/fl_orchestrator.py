@@ -121,7 +121,7 @@ class FederatedOrchestrator:
         t.start()
 
     def emit_event(self, event_type: str, payload: Optional[Dict[str, Any]] = None):
-        """Emits a real-time event to the in-memory event stream."""
+        """Emits a real-time event to the in-memory event stream and auto-advances stages."""
         event_obj = {
             "id": len(self.events) + 1,
             "type": event_type,
@@ -132,6 +132,16 @@ class FederatedOrchestrator:
         }
         with self.lock:
             self.events.append(event_obj)
+            # Auto-advance stage when local training finishes or upload starts
+            if event_type in ("UPDATE_GENERATED", "MODEL_UPDATE_UPLOADING"):
+                if self.stage == "local_training":
+                    self.stage = "receiving_updates"
+            elif event_type == "LOCAL_TRAINING_PROGRESS":
+                b = (payload or {}).get("batch")
+                tb = (payload or {}).get("total_batches")
+                if b and tb and b >= tb:
+                    if self.stage == "local_training":
+                        self.stage = "receiving_updates"
         for q in list(self.event_subscribers):
             try:
                 q.put(event_obj)
@@ -228,6 +238,10 @@ class FederatedOrchestrator:
                     ),
                 }
 
+            # Increment round number if previous was successfully completed
+            if self.stage == "completed":
+                self.current_round += 1
+
             self.is_active = True
             self.aggregation_method = aggregation
             self.demo_mode = demo
@@ -268,8 +282,8 @@ class FederatedOrchestrator:
             "status": f"Global Model {self.global_version} distributed to {n_nodes} hospital node(s).",
         })
 
-        # Transition to local training
-        time.sleep(1.2)
+        # Transition to local training briskly
+        time.sleep(0.4)
         with self.lock:
             self.stage = "local_training"
 
@@ -359,11 +373,24 @@ class FederatedOrchestrator:
                 if not self.round_updates.get(nid, {}).get("parameters_base64")
             ]
             if missing_params:
+                with self.lock:
+                    self.stage = "receiving_updates"
                 return {
                     "status": "updates_received",
                     "received_count": received_count,
                     "message": f"Waiting for model parameters from: {missing_params}",
                 }
+
+            with self.lock:
+                self.stage = "aggregating"
+
+            self.emit_event("AGGREGATION_STARTED", {
+                "round": self.current_round,
+                "participants": self.round_participants,
+                "received_count": received_count,
+                "total_clients": total_expected,
+                "total_samples": sum(u.get("num_samples", 0) for u in self.round_updates.values()),
+            })
 
             result = self._execute_fedavg()
             if result.get("status") == "error":
@@ -373,6 +400,9 @@ class FederatedOrchestrator:
                 "received_count": received_count,
                 **result,
             }
+
+        with self.lock:
+            self.stage = "receiving_updates"
 
         return {"status": "update_accepted", "received_count": received_count}
 
@@ -468,19 +498,27 @@ class FederatedOrchestrator:
 
         backend_model_path = BACKEND_DIR / "models" / "federated_model.pth"
         backend_model_path.parent.mkdir(parents=True, exist_ok=True)
-        torch.save(aggregated, str(backend_model_path))
+        try:
+            import shutil
+            shutil.copyfile(str(active_model_path), str(backend_model_path))
+        except Exception:
+            torch.save(aggregated, str(backend_model_path))
 
         print(f"[FEDAVG]  Saved: {checkpoint_path}")
         print(f"[FEDAVG]  Active model updated: {active_model_path}")
 
-        # Reload inference engine if available
-        try:
-            import importlib
-            _main_mod = importlib.import_module("main") if "main" in sys.modules else None
-            if _main_mod and hasattr(_main_mod, "reload_inference"):
-                _main_mod.reload_inference()
-        except Exception as _reload_err:
-            print(f"[FL] Inference reload skipped: {_reload_err}")
+        # Reload inference engine in background thread so HTTP response is instant
+        def _bg_reload():
+            try:
+                import importlib
+                _main_mod = importlib.import_module("main") if "main" in sys.modules else None
+                if _main_mod and hasattr(_main_mod, "reload_inference"):
+                    _main_mod.reload_inference()
+                    print("[FL] Central inference engine reloaded successfully.")
+            except Exception as _reload_err:
+                print(f"[FL] Inference reload skipped: {_reload_err}")
+
+        threading.Thread(target=_bg_reload, daemon=True).start()
 
         # Compute weighted metrics
         weighted_loss = sum(
@@ -560,8 +598,8 @@ class FederatedOrchestrator:
         })
 
         with self.lock:
-            self.round_updates = {}
-            self.current_round += 1
+            # Preserve updates for modal & dashboard display
+            self.last_round_updates = dict(self.round_updates)
             self.rounds_completed_in_session += 1
             remaining_rounds = self.target_rounds - self.rounds_completed_in_session
             should_launch_next = remaining_rounds > 0
@@ -573,10 +611,10 @@ class FederatedOrchestrator:
             }
 
         if should_launch_next:
-            print(f"\n[ORCHESTRATOR] Launching next round #{self.current_round} with Global Model {new_version}...")
+            print(f"\n[ORCHESTRATOR] Launching next round #{self.current_round + 1} with Global Model {new_version}...")
 
             def _launch_next():
-                time.sleep(3.5)
+                time.sleep(2.0)
                 self.start_round(
                     aggregation=saved_params["aggregation"],
                     demo=saved_params["demo"],
@@ -619,6 +657,7 @@ class FederatedOrchestrator:
             online_nodes = [
                 nid for nid, n in self.nodes.items() if n.get("status") == "online"
             ]
+            active_updates = self.round_updates or getattr(self, "last_round_updates", {})
             return {
                 "is_active": self.is_active,
                 "stage": self.stage,
@@ -632,7 +671,7 @@ class FederatedOrchestrator:
                 "simulation": self.is_simulation,
                 "round_updates": {
                     nid: {k: v for k, v in upd.items() if k != "parameters_base64"}
-                    for nid, upd in self.round_updates.items()
+                    for nid, upd in active_updates.items()
                 },
                 "round_participants": list(self.round_participants),
                 "nodes": {k: dict(v) for k, v in self.nodes.items()},
