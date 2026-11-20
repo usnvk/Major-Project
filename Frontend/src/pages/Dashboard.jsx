@@ -165,6 +165,27 @@ export default function Dashboard({ onNavigate }) {
         </div>
       </div>
 
+      {/* ── Treatment & Recovery Monitoring Hub Banner ── */}
+      <div className="bg-gradient-to-r from-[#1E3A8A] to-[#1E293B] text-white p-5 rounded-2xl shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4 border border-blue-800/40">
+        <div className="space-y-1">
+          <div className="inline-flex items-center space-x-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-blue-500/30 text-blue-200 border border-blue-400/30">
+            <Activity className="w-3.5 h-3.5" />
+            <span>WHO DOTS Protocol Module</span>
+          </div>
+          <h3 className="text-base font-bold">Stage-Wise TB Patient Treatment & Recovery Monitoring</h3>
+          <p className="text-xs text-blue-200 max-w-2xl">
+            Track stage-wise prescribed medication schedules (HRZE/HR), record follow-up visits, evaluate side-by-side CXR scans, and certify doctor-verified recovery.
+          </p>
+        </div>
+        <button
+          onClick={() => onNavigate('treatment-hub')}
+          className="shrink-0 inline-flex items-center space-x-2 bg-white hover:bg-blue-50 text-[#1E3A8A] font-bold px-4 py-2.5 rounded-xl shadow-xs transition text-xs"
+        >
+          <span>Open Recovery Hub</span>
+          <ArrowRight className="w-4 h-4" />
+        </button>
+      </div>
+
       {/* ── Workspace Grid: Recent Clinical Cases & Audit Trail ── */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
         

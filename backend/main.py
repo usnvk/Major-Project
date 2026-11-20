@@ -53,6 +53,14 @@ try:
         log_audit_event,
         save_feedback,
         save_prediction,
+        register_patient,
+        get_patient,
+        get_all_patients,
+        update_patient_treatment,
+        record_patient_followup_visit,
+        get_patient_progress_report,
+        get_doctor_recovery_overview,
+        get_default_medications_for_stage,
     )
     from .dicom_sanitizer import (
         derive_patient_hash,
@@ -92,6 +100,14 @@ except ImportError:
         log_audit_event,
         save_feedback,
         save_prediction,
+        register_patient,
+        get_patient,
+        get_all_patients,
+        update_patient_treatment,
+        record_patient_followup_visit,
+        get_patient_progress_report,
+        get_doctor_recovery_overview,
+        get_default_medications_for_stage,
     )
     from dicom_sanitizer import (
         derive_patient_hash,
@@ -303,6 +319,32 @@ class FollowUpCreateInput(BaseModel):
     doctor_email: str | None = None
     scheduled_at: str = Field(min_length=1)
     reason: str | None = None
+
+
+class PatientRegisterInput(BaseModel):
+    name: str = Field(min_length=1)
+    patient_hash: str | None = None
+    age: int | None = None
+    gender: str | None = None
+    contact_phone: str | None = None
+    contact_email: str | None = None
+    emergency_contact: str | None = None
+    medical_history: str | None = None
+    allergies: str | None = None
+    initial_stage: int = Field(default=1, ge=1, le=5)
+    assigned_doctor_email: str | None = None
+    assigned_doctor_name: str | None = None
+    prescribed_medicines: list[dict[str, Any]] | None = None
+
+
+class PatientTreatmentUpdateInput(BaseModel):
+    current_stage: int | None = Field(default=None, ge=1, le=5)
+    treatment_status: str | None = None
+    doctor_confirmed_cured: bool | None = None
+    prescribed_medicines: list[dict[str, Any]] | None = None
+    doctor_email: str | None = None
+    doctor_name: str | None = None
+    doctor_notes: str | None = None
 
 
 def get_stage_from_confidence(confidence: float) -> int:
@@ -657,6 +699,234 @@ def review_visit(data: PatientVisitReviewInput, role: str = "doctor") -> dict[st
         raise HTTPException(status_code=404, detail=str(error)) from error
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# STAGE-WISE TREATMENT & RECOVERY MONITORING ENDPOINTS
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.post("/patients/register")
+def register_new_patient(data: PatientRegisterInput, role: str = "doctor") -> dict[str, Any]:
+    """Registers a patient in the stage-wise treatment and recovery monitoring protocol."""
+    if role not in {"doctor", "admin"}:
+        raise HTTPException(status_code=403, detail="Only clinicians can register patients in the treatment protocol.")
+    try:
+        return register_patient(
+            patient_hash=data.patient_hash,
+            name=data.name,
+            age=data.age,
+            gender=data.gender,
+            contact_phone=data.contact_phone,
+            contact_email=data.contact_email,
+            emergency_contact=data.emergency_contact,
+            medical_history=data.medical_history,
+            allergies=data.allergies,
+            initial_stage=data.initial_stage,
+            assigned_doctor_email=data.assigned_doctor_email,
+            assigned_doctor_name=data.assigned_doctor_name,
+            prescribed_medicines=data.prescribed_medicines,
+        )
+    except Exception as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.get("/patients")
+def list_patients(
+    filter_status: str | None = None,
+    search: str | None = None,
+    doctor_email: str | None = None,
+    role: str = "doctor",
+) -> list[dict[str, Any]]:
+    """Returns registered patients with treatment stages and review statuses."""
+    if role not in {"doctor", "admin", "hospital"}:
+        raise HTTPException(status_code=403, detail="Insufficient role to view patient directory.")
+    return get_all_patients(filter_status=filter_status, search=search, doctor_email=doctor_email)
+
+
+@app.get("/patients/{patient_hash}")
+def get_patient_profile(
+    patient_hash: str,
+    role: str = "doctor",
+    viewer_patient_hash: str | None = None,
+) -> dict[str, Any]:
+    """Returns comprehensive patient details, active treatment stage, and visit trajectory."""
+    if role == "patient" and viewer_patient_hash != patient_hash:
+        raise HTTPException(status_code=403, detail="You can only access your own clinical recovery record.")
+    pt = get_patient(patient_hash)
+    if not pt:
+        raise HTTPException(status_code=404, detail="Patient record not found.")
+
+    # Normalize image paths for web access
+    def _norm(path: str | None) -> str | None:
+        if not path:
+            return None
+        p = Path(path)
+        if "edge_storage" in str(p) or "inferences" in str(p):
+            return f"/edge-storage/inferences/{p.name}"
+        return path
+
+    if pt.get("visits"):
+        for v in pt["visits"]:
+            v["xray_image_path"] = _norm(v.get("xray_image_path"))
+            v["heatmap_image_path"] = _norm(v.get("heatmap_image_path"))
+    if pt.get("latest_visit"):
+        pt["latest_visit"]["xray_image_path"] = _norm(pt["latest_visit"].get("xray_image_path"))
+        pt["latest_visit"]["heatmap_image_path"] = _norm(pt["latest_visit"].get("heatmap_image_path"))
+
+    return pt
+
+
+@app.put("/patients/{patient_hash}/treatment")
+def update_treatment_plan(
+    patient_hash: str,
+    data: PatientTreatmentUpdateInput,
+    role: str = "doctor",
+) -> dict[str, Any]:
+    """Updates treatment stage, prescribed medicines, or marks doctor-confirmed cure."""
+    if role != "doctor":
+        raise HTTPException(status_code=403, detail="Only doctors can modify treatment stages or confirm cure.")
+    try:
+        return update_patient_treatment(
+            patient_hash=patient_hash,
+            current_stage=data.current_stage,
+            prescribed_medicines=data.prescribed_medicines,
+            treatment_status=data.treatment_status,
+            doctor_confirmed_cured=data.doctor_confirmed_cured,
+            doctor_email=data.doctor_email,
+            doctor_name=data.doctor_name,
+            doctor_notes=data.doctor_notes,
+        )
+    except Exception as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.post("/patients/{patient_hash}/followup-visit")
+async def record_followup_visit(
+    patient_hash: str,
+    file: UploadFile | None = File(None),
+    symptoms: str | None = Form(None),
+    doctor_observations: str | None = Form(None),
+    validated_change: str = Form("unchanged"),
+    treatment_action: str = Form("continue"),
+    treatment_stage: int = Form(1),
+    prescribed_medicines: str | None = Form(None),
+    next_followup_date: str | None = Form(None),
+    doctor_email: str | None = Form(None),
+    doctor_name: str | None = Form(None),
+    role: str = "doctor",
+) -> dict[str, Any]:
+    """
+    Evaluates follow-up visit. Runs CXR inference if new scan is uploaded,
+    calculates comparative AI delta against previous visit, and records doctor evaluation.
+    """
+    if role not in {"doctor", "admin"}:
+        raise HTTPException(status_code=403, detail="Only clinicians can record follow-up assessments.")
+
+    ai_pred = None
+    ai_conf = None
+    xray_path = None
+    heatmap_path = None
+    pred_id = None
+
+    if file and file.filename:
+        image, is_dicom, auto_patient_hash, dcm_metadata, dcm_path = await _read_image(file)
+        try:
+            inference_result = _load_inference().predict(image)
+        except Exception as error:
+            raise HTTPException(status_code=503, detail=f"Inference unavailable: {error}") from error
+
+        if inference_result.get("status") == "REJECTED":
+            raise HTTPException(
+                status_code=422,
+                detail=inference_result.get(
+                    "rejection_reason",
+                    "Image rejected: Not a valid Chest X-Ray radiograph.",
+                ),
+            )
+
+        ai_conf = float(inference_result["confidence"])
+        is_pos = inference_result["label"] == "Tuberculosis"
+        ai_pred = "TB Positive" if is_pos else "TB Negative"
+        pred_id = str(uuid.uuid4())
+
+        cached_img = EDGE_STORAGE_DIR / "inferences" / f"{pred_id}.png"
+        try:
+            image.convert("RGB").save(cached_img, format="PNG")
+            xray_path = str(cached_img)
+        except Exception:
+            pass
+
+        hm_path = EDGE_STORAGE_DIR / "inferences" / f"{pred_id}_heatmap.png"
+        hm_b64 = inference_result.get("heatmap_base64")
+        if hm_b64:
+            try:
+                enc = hm_b64.split(",", 1)[1]
+                hm_path.write_bytes(base64.b64decode(enc))
+                heatmap_path = str(hm_path)
+            except Exception:
+                heatmap_path = None
+
+        save_prediction(
+            prediction_id=pred_id,
+            filename=file.filename or "followup.png",
+            result=ai_pred,
+            confidence=ai_conf,
+            stage=treatment_stage or None,
+            patient_hash=patient_hash,
+            patient_name=None,
+            uploaded_by_email=doctor_email,
+            is_dicom=is_dicom,
+            image_path=xray_path,
+        )
+
+    parsed_meds = None
+    if prescribed_medicines and prescribed_medicines.strip():
+        try:
+            parsed_meds = json.loads(prescribed_medicines)
+        except Exception:
+            parsed_meds = None
+
+    visit = record_patient_followup_visit(
+        patient_hash=patient_hash,
+        symptoms=symptoms,
+        doctor_observations=doctor_observations,
+        doctor_validated_change=validated_change,
+        doctor_treatment_action=treatment_action,
+        treatment_stage=treatment_stage,
+        prescribed_medicines=parsed_meds,
+        doctor_email=doctor_email,
+        doctor_name=doctor_name,
+        xray_image_path=xray_path,
+        heatmap_image_path=heatmap_path,
+        prediction_id=pred_id,
+        ai_prediction=ai_pred,
+        ai_confidence=ai_conf,
+        next_followup_date=next_followup_date,
+    )
+    return visit
+
+
+@app.get("/patients/{patient_hash}/progress-report")
+def patient_progress_report(
+    patient_hash: str,
+    role: str = "doctor",
+    viewer_patient_hash: str | None = None,
+) -> dict[str, Any]:
+    """Generates comprehensive patient progress report with side-by-side CXR comparisons."""
+    if role == "patient" and viewer_patient_hash != patient_hash:
+        raise HTTPException(status_code=403, detail="You can only access your own progress report.")
+    try:
+        return get_patient_progress_report(patient_hash)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+
+
+@app.get("/analytics/doctor-overview")
+def doctor_recovery_overview(role: str = "doctor", doctor_email: str | None = None) -> dict[str, Any]:
+    """Returns stage distribution and recovery progress metrics for the doctor dashboard."""
+    if role not in {"doctor", "admin"}:
+        raise HTTPException(status_code=403, detail="Insufficient role.")
+    return get_doctor_recovery_overview(doctor_email)
+
+
 @app.get("/audit/recent")
 def recent_audit(limit: int = 25) -> list[dict[str, Any]]:
     """Returns recent HIPAA compliance events from the SQLite audit table."""
@@ -767,6 +1037,23 @@ async def predict(
             heatmap_path = None
     else:
         heatmap_path = None
+
+    # Ensure patient is recorded in treatment protocol table
+    try:
+        existing_pt = get_patient(final_patient_hash)
+    except Exception:
+        existing_pt = None
+
+    if not existing_pt:
+        try:
+            register_patient(
+                patient_hash=final_patient_hash,
+                name=final_patient_name or f"Patient {final_patient_hash}",
+                initial_stage=max(1, stage) if is_positive else 1,
+                assigned_doctor_email=uploaded_by,
+            )
+        except Exception:
+            pass
 
     create_patient_visit(
         visit_id=str(uuid.uuid4()),

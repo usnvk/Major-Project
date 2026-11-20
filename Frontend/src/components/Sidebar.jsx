@@ -29,6 +29,7 @@ export default function Sidebar({ activeTab, setActiveTab, isOpen, onCloseMobile
   if (role === 'admin') {
     navItems = [
       { id: 'admin-panel', label: 'FL Operations Hub', icon: LayoutDashboard },
+      { id: 'treatment-hub', label: 'Treatment Monitoring', icon: HeartPulse },
       { id: 'federated-network', label: 'Federated Telemetry', icon: Network },
       { id: 'history', label: 'HIPAA Audit Trail', icon: History },
     ];
@@ -47,6 +48,7 @@ export default function Sidebar({ activeTab, setActiveTab, isOpen, onCloseMobile
     // Doctor
     navItems = [
       { id: 'dashboard', label: 'Clinical Dashboard', icon: LayoutDashboard },
+      { id: 'treatment-hub', label: 'Treatment & Recovery', icon: HeartPulse },
       { id: 'upload', label: 'New CXR Analysis', icon: UploadCloud },
       { id: 'result', label: 'AI Diagnostic Review', icon: Clock },
       { id: 'history', label: 'Scan Records & Audit', icon: History },

@@ -1,5 +1,7 @@
 import hashlib
+import json
 import sqlite3
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -177,6 +179,51 @@ def init_db() -> None:
         if "created_at" not in feedback_columns:
             connection.execute("ALTER TABLE feedback ADD COLUMN created_at TEXT")
 
+        # Patients table for Stage-wise Treatment & Recovery Monitoring
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS patients (
+                patient_hash TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                age INTEGER,
+                gender TEXT,
+                contact_phone TEXT,
+                contact_email TEXT,
+                emergency_contact TEXT,
+                medical_history TEXT,
+                allergies TEXT,
+                initial_diagnosis_date TEXT NOT NULL,
+                initial_stage INTEGER DEFAULT 1,
+                current_stage INTEGER DEFAULT 1,
+                treatment_status TEXT DEFAULT 'active',
+                doctor_confirmed_cured INTEGER DEFAULT 0,
+                doctor_cured_date TEXT,
+                prescribed_medicines TEXT,
+                assigned_doctor_email TEXT,
+                assigned_doctor_name TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            """
+        )
+
+        # Migrate patient_visits columns if existing db
+        visit_columns = {
+            row["name"] for row in connection.execute("PRAGMA table_info(patient_visits)")
+        }
+        if "visit_number" not in visit_columns:
+            connection.execute("ALTER TABLE patient_visits ADD COLUMN visit_number INTEGER DEFAULT 1")
+        if "prescribed_medicines" not in visit_columns:
+            connection.execute("ALTER TABLE patient_visits ADD COLUMN prescribed_medicines TEXT")
+        if "doctor_treatment_action" not in visit_columns:
+            connection.execute("ALTER TABLE patient_visits ADD COLUMN doctor_treatment_action TEXT")
+        if "ai_comparison_notes" not in visit_columns:
+            connection.execute("ALTER TABLE patient_visits ADD COLUMN ai_comparison_notes TEXT")
+        if "comparison_delta_confidence" not in visit_columns:
+            connection.execute("ALTER TABLE patient_visits ADD COLUMN comparison_delta_confidence REAL")
+        if "comparison_status" not in visit_columns:
+            connection.execute("ALTER TABLE patient_visits ADD COLUMN comparison_status TEXT")
+
         # High performance query indexes
         connection.executescript(
             """
@@ -186,6 +233,9 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
             CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_logs(created_at);
             CREATE INDEX IF NOT EXISTS idx_al_pending ON active_learning_queue(pending_active_learning);
+            CREATE INDEX IF NOT EXISTS idx_patients_status ON patients(treatment_status);
+            CREATE INDEX IF NOT EXISTS idx_patients_stage ON patients(current_stage);
+            CREATE INDEX IF NOT EXISTS idx_visits_patient_hash ON patient_visits(patient_hash);
             """
         )
 
@@ -425,6 +475,621 @@ def review_patient_visit(
         details=f"Doctor validated change: {doctor_validated_change}. Stage: {treatment_stage or 'N/A'}. Attending: {doctor_name}",
     )
     return dict(row)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STAGE-WISE TB TREATMENT & RECOVERY MONITORING PROTOCOL (WHO / DOTS)
+# ─────────────────────────────────────────────────────────────────────────────
+
+STANDARD_TB_MEDICATIONS: dict[int, list[dict[str, Any]]] = {
+    1: [
+        {"name": "Rifampicin (RIF)", "dosage": "600 mg", "frequency": "Once daily (empty stomach)", "phase": "Intensive Phase (HRZE)", "instructions": "Potent bactericidal; urine and tears may turn orange-red."},
+        {"name": "Isoniazid (INH)", "dosage": "300 mg", "frequency": "Once daily", "phase": "Intensive Phase (HRZE)", "instructions": "Rapid bacillary clearance; monitor liver function (AST/ALT)."},
+        {"name": "Pyrazinamide (PZA)", "dosage": "1500 mg", "frequency": "Once daily", "phase": "Intensive Phase (HRZE)", "instructions": "Sterilizing agent in acidic intracellular environments; monitor uric acid."},
+        {"name": "Ethambutol (EMB)", "dosage": "1200 mg", "frequency": "Once daily", "phase": "Intensive Phase (HRZE)", "instructions": "Prevents emergence of drug resistance; periodic visual acuity check."},
+        {"name": "Pyridoxine (Vit B6)", "dosage": "25 mg", "frequency": "Once daily", "phase": "Adjuvant Neuroprotection", "instructions": "Crucial co-prescription to prevent INH-induced peripheral neuropathy."},
+    ],
+    2: [
+        {"name": "Rifampicin (RIF)", "dosage": "600 mg", "frequency": "Once daily (empty stomach)", "phase": "Continuation Phase (HR)", "instructions": "Eliminates persistent dormant bacilli to prevent relapse."},
+        {"name": "Isoniazid (INH)", "dosage": "300 mg", "frequency": "Once daily", "phase": "Continuation Phase (HR)", "instructions": "Maintains sustained bacillary inhibition."},
+        {"name": "Pyridoxine (Vit B6)", "dosage": "25 mg", "frequency": "Once daily", "phase": "Adjuvant Neuroprotection", "instructions": "Continue neuroprotective support during continuation therapy."},
+    ],
+    3: [
+        {"name": "Rifampicin (RIF)", "dosage": "600 mg", "frequency": "Once daily", "phase": "Consolidation Phase", "instructions": "Sustained sterilization; sputum conversion confirmation required."},
+        {"name": "Isoniazid (INH)", "dosage": "300 mg", "frequency": "Once daily", "phase": "Consolidation Phase", "instructions": "Consolidation antimicrobial coverage."},
+    ],
+    4: [
+        {"name": "Rifampicin (RIF)", "dosage": "600 mg", "frequency": "Once daily", "phase": "Extended Maintenance", "instructions": "Extended regimen for slow-resolving cavitary disease under specialist care."},
+        {"name": "Isoniazid (INH)", "dosage": "300 mg", "frequency": "Once daily", "phase": "Extended Maintenance", "instructions": "Extended therapy monitoring."},
+        {"name": "Levofloxacin (Optional)", "dosage": "500 mg", "frequency": "Once daily", "phase": "Specialist Adjuvant", "instructions": "If clinically indicated by drug sensitivity profile."},
+    ],
+    5: [
+        {"name": "Post-Treatment Relapse Surveillance", "dosage": "None (Cured)", "frequency": "Quarterly Evaluation", "phase": "Recovery & Surveillance", "instructions": "No active medication. Follow-up chest radiograph at Month 9 and Month 12 to ensure no recurrence."},
+    ],
+}
+
+
+def get_default_medications_for_stage(stage: int) -> list[dict[str, Any]]:
+    """Returns standardized WHO / DOTS prescribed medications for a given TB treatment stage."""
+    clean_stage = max(1, min(5, int(stage)))
+    return list(STANDARD_TB_MEDICATIONS.get(clean_stage, STANDARD_TB_MEDICATIONS[1]))
+
+
+def register_patient(
+    patient_hash: str | None,
+    name: str,
+    age: int | None = None,
+    gender: str | None = None,
+    contact_phone: str | None = None,
+    contact_email: str | None = None,
+    emergency_contact: str | None = None,
+    medical_history: str | None = None,
+    allergies: str | None = None,
+    initial_stage: int = 1,
+    assigned_doctor_email: str | None = None,
+    assigned_doctor_name: str | None = None,
+    prescribed_medicines: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Registers a patient in the stage-wise treatment and recovery monitoring protocol."""
+    now_iso = datetime.now(timezone.utc).isoformat()
+    clean_hash = (
+        patient_hash.strip()
+        if patient_hash and patient_hash.strip()
+        else f"PT-{hashlib.sha256((name + now_iso).encode()).hexdigest()[:8].upper()}"
+    )
+    clean_stage = max(1, min(5, int(initial_stage or 1)))
+    meds = prescribed_medicines if prescribed_medicines is not None else get_default_medications_for_stage(clean_stage)
+    meds_json = json.dumps(meds)
+
+    with get_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO patients
+            (patient_hash, name, age, gender, contact_phone, contact_email,
+             emergency_contact, medical_history, allergies, initial_diagnosis_date,
+             initial_stage, current_stage, treatment_status, doctor_confirmed_cured,
+             prescribed_medicines, assigned_doctor_email, assigned_doctor_name,
+             created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', 0, ?, ?, ?, ?, ?)
+            ON CONFLICT(patient_hash) DO UPDATE SET
+                name=excluded.name,
+                age=COALESCE(excluded.age, patients.age),
+                gender=COALESCE(excluded.gender, patients.gender),
+                contact_phone=COALESCE(excluded.contact_phone, patients.contact_phone),
+                contact_email=COALESCE(excluded.contact_email, patients.contact_email),
+                emergency_contact=COALESCE(excluded.emergency_contact, patients.emergency_contact),
+                medical_history=COALESCE(excluded.medical_history, patients.medical_history),
+                allergies=COALESCE(excluded.allergies, patients.allergies),
+                assigned_doctor_email=COALESCE(excluded.assigned_doctor_email, patients.assigned_doctor_email),
+                assigned_doctor_name=COALESCE(excluded.assigned_doctor_name, patients.assigned_doctor_name),
+                updated_at=excluded.updated_at
+            """,
+            (
+                clean_hash,
+                name.strip(),
+                age,
+                gender,
+                contact_phone,
+                contact_email,
+                emergency_contact,
+                medical_history,
+                allergies,
+                now_iso[:10],
+                clean_stage,
+                clean_stage,
+                meds_json,
+                assigned_doctor_email,
+                assigned_doctor_name,
+                now_iso,
+                now_iso,
+            ),
+        )
+
+    log_audit_event(
+        user_email=assigned_doctor_email or "doctor@pulmoscan.org",
+        user_role="doctor",
+        action="PATIENT_REGISTERED",
+        resource_id=clean_hash,
+        details=f"Patient {name} registered in treatment protocol. Stage: {clean_stage}. Attending: {assigned_doctor_name or 'Clinician'}",
+    )
+    return get_patient(clean_hash) or {}
+
+
+def get_patient(patient_hash: str) -> dict[str, Any] | None:
+    """Returns complete patient profile, active stage, and clinical trajectory."""
+    with get_connection() as connection:
+        p_row = connection.execute(
+            "SELECT * FROM patients WHERE patient_hash = ?",
+            (patient_hash,),
+        ).fetchone()
+
+    if not p_row:
+        # Fallback: check if exists in users
+        with get_connection() as connection:
+            u_row = connection.execute(
+                "SELECT * FROM users WHERE patient_hash = ? OR email = ?",
+                (patient_hash, patient_hash),
+            ).fetchone()
+        if u_row:
+            reg = register_patient(
+                patient_hash=u_row["patient_hash"] or patient_hash,
+                name=u_row["name"],
+                contact_email=u_row["email"],
+                initial_stage=1,
+            )
+            return reg
+        return None
+
+    patient_dict = dict(p_row)
+    try:
+        patient_dict["prescribed_medicines"] = (
+            json.loads(patient_dict["prescribed_medicines"])
+            if patient_dict.get("prescribed_medicines")
+            else get_default_medications_for_stage(patient_dict.get("current_stage", 1))
+        )
+    except Exception:
+        patient_dict["prescribed_medicines"] = get_default_medications_for_stage(patient_dict.get("current_stage", 1))
+
+    visits = get_patient_visits(patient_hash)
+    patient_dict["visits"] = visits
+    patient_dict["visit_count"] = len(visits)
+    patient_dict["latest_visit"] = visits[-1] if visits else None
+    patient_dict["follow_ups"] = get_follow_ups(patient_hash)
+    return patient_dict
+
+
+def get_all_patients(
+    filter_status: str | None = None,
+    search: str | None = None,
+    doctor_email: str | None = None,
+) -> list[dict[str, Any]]:
+    """Lists registered patients with stage progression and review flags."""
+    query = "SELECT * FROM patients"
+    conditions = []
+    params: list[Any] = []
+
+    if filter_status and filter_status != "all":
+        if filter_status == "needs_review":
+            conditions.append(
+                "patient_hash IN (SELECT patient_hash FROM patient_visits WHERE doctor_review_status = 'pending')"
+            )
+        elif filter_status == "completed":
+            conditions.append("doctor_confirmed_cured = 1")
+        elif filter_status == "active":
+            conditions.append("doctor_confirmed_cured = 0 AND treatment_status = 'active'")
+        else:
+            conditions.append("treatment_status = ?")
+            params.append(filter_status)
+
+    if search and search.strip():
+        term = f"%{search.strip()}%"
+        conditions.append("(name LIKE ? OR patient_hash LIKE ? OR contact_phone LIKE ?)")
+        params.extend([term, term, term])
+
+    if doctor_email:
+        conditions.append("(assigned_doctor_email = ? OR assigned_doctor_email IS NULL)")
+        params.append(doctor_email)
+
+    if conditions:
+        query += " WHERE " + " AND ".join(conditions)
+
+    query += " ORDER BY updated_at DESC"
+
+    with get_connection() as connection:
+        rows = connection.execute(query, params).fetchall()
+
+    results = []
+    for r in rows:
+        p = dict(r)
+        p_hash = p["patient_hash"]
+        try:
+            p["prescribed_medicines"] = (
+                json.loads(p["prescribed_medicines"])
+                if p.get("prescribed_medicines")
+                else get_default_medications_for_stage(p.get("current_stage", 1))
+            )
+        except Exception:
+            p["prescribed_medicines"] = get_default_medications_for_stage(p.get("current_stage", 1))
+
+        # Attach latest visit info
+        with get_connection() as connection:
+            latest_v = connection.execute(
+                """
+                SELECT visit_id, visit_date, ai_prediction, ai_confidence, treatment_stage,
+                       doctor_review_status, doctor_validated_change, doctor_name, created_at,
+                       xray_image_path, heatmap_image_path
+                FROM patient_visits
+                WHERE patient_hash = ?
+                ORDER BY visit_date DESC, created_at DESC LIMIT 1
+                """,
+                (p_hash,),
+            ).fetchone()
+
+            v_count = connection.execute(
+                "SELECT COUNT(*) AS cnt FROM patient_visits WHERE patient_hash = ?",
+                (p_hash,),
+            ).fetchone()["cnt"]
+
+            next_fu = connection.execute(
+                """
+                SELECT scheduled_at, reason FROM follow_ups
+                WHERE patient_hash = ? AND status = 'scheduled'
+                ORDER BY scheduled_at ASC LIMIT 1
+                """,
+                (p_hash,),
+            ).fetchone()
+
+            pending_rev = connection.execute(
+                """
+                SELECT COUNT(*) AS cnt FROM patient_visits
+                WHERE patient_hash = ? AND doctor_review_status = 'pending'
+                """,
+                (p_hash,),
+            ).fetchone()["cnt"]
+
+        p["visit_count"] = v_count
+        p["has_pending_review"] = pending_rev > 0
+        p["latest_visit"] = dict(latest_v) if latest_v else None
+        p["next_follow_up"] = dict(next_fu) if next_fu else None
+
+        # Calculate days in treatment
+        diag_date = p.get("initial_diagnosis_date") or p.get("created_at")[:10]
+        try:
+            d1 = datetime.strptime(diag_date, "%Y-%m-%d").date()
+            d2 = datetime.now(timezone.utc).date()
+            p["days_in_treatment"] = max(1, (d2 - d1).days)
+        except Exception:
+            p["days_in_treatment"] = 1
+
+        results.append(p)
+    return results
+
+
+def update_patient_treatment(
+    patient_hash: str,
+    current_stage: int | None = None,
+    prescribed_medicines: list[dict[str, Any]] | None = None,
+    treatment_status: str | None = None,
+    doctor_confirmed_cured: bool | None = None,
+    doctor_email: str | None = None,
+    doctor_name: str | None = None,
+    doctor_notes: str | None = None,
+) -> dict[str, Any]:
+    """Updates patient treatment stage, medications, or doctor-confirmed cure status."""
+    now_iso = datetime.now(timezone.utc).isoformat()
+    fields: list[str] = ["updated_at = ?"]
+    params: list[Any] = [now_iso]
+
+    if current_stage is not None:
+        clean_stage = max(1, min(5, int(current_stage)))
+        fields.append("current_stage = ?")
+        params.append(clean_stage)
+        if prescribed_medicines is None:
+            prescribed_medicines = get_default_medications_for_stage(clean_stage)
+
+    if prescribed_medicines is not None:
+        fields.append("prescribed_medicines = ?")
+        params.append(json.dumps(prescribed_medicines))
+
+    if treatment_status is not None:
+        fields.append("treatment_status = ?")
+        params.append(treatment_status)
+
+    if doctor_confirmed_cured is not None:
+        cured_int = 1 if doctor_confirmed_cured else 0
+        fields.append("doctor_confirmed_cured = ?")
+        params.append(cured_int)
+        if cured_int == 1:
+            fields.append("doctor_cured_date = ?")
+            params.append(now_iso[:10])
+            fields.append("treatment_status = 'completed'")
+            fields.append("current_stage = 5")
+
+    if doctor_email:
+        fields.append("assigned_doctor_email = ?")
+        params.append(doctor_email)
+    if doctor_name:
+        fields.append("assigned_doctor_name = ?")
+        params.append(doctor_name)
+
+    params.append(patient_hash)
+    sql = f"UPDATE patients SET {', '.join(fields)} WHERE patient_hash = ?"
+
+    with get_connection() as connection:
+        connection.execute(sql, params)
+
+    details = f"Treatment plan updated for {patient_hash} by {doctor_name or 'Doctor'}."
+    if doctor_confirmed_cured:
+        details += " DOCTOR EXPLICITLY CONFIRMED PATIENT CURED & COMPLETED TREATMENT."
+    if current_stage:
+        details += f" Advanced to Stage {current_stage}."
+
+    log_audit_event(
+        user_email=doctor_email or "doctor@pulmoscan.org",
+        user_role="doctor",
+        action="TREATMENT_PLAN_UPDATED",
+        resource_id=patient_hash,
+        details=details,
+    )
+    return get_patient(patient_hash) or {}
+
+
+def record_patient_followup_visit(
+    patient_hash: str,
+    symptoms: str | None = None,
+    doctor_observations: str | None = None,
+    doctor_validated_change: str = "unchanged",
+    doctor_treatment_action: str = "continue",
+    treatment_stage: int = 1,
+    prescribed_medicines: list[dict[str, Any]] | None = None,
+    doctor_email: str | None = None,
+    doctor_name: str | None = None,
+    xray_image_path: str | None = None,
+    heatmap_image_path: str | None = None,
+    prediction_id: str | None = None,
+    ai_prediction: str | None = None,
+    ai_confidence: float | None = None,
+    next_followup_date: str | None = None,
+) -> dict[str, Any]:
+    """
+    Records a follow-up visit with side-by-side CXR comparison against the previous visit.
+    Calculates AI comparative metrics and logs doctor-verified clinical assessment.
+    """
+    now_iso = datetime.now(timezone.utc).isoformat()
+    visit_id = f"VST-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:6].upper()}"
+    clean_stage = max(1, min(5, int(treatment_stage or 1)))
+
+    with get_connection() as connection:
+        # Get previous visit for comparative linkage
+        prev_row = connection.execute(
+            """
+            SELECT * FROM patient_visits
+            WHERE patient_hash = ?
+            ORDER BY visit_date DESC, created_at DESC LIMIT 1
+            """,
+            (patient_hash,),
+        ).fetchone()
+
+        all_visits_count = connection.execute(
+            "SELECT COUNT(*) AS cnt FROM patient_visits WHERE patient_hash = ?",
+            (patient_hash,),
+        ).fetchone()["cnt"]
+
+    visit_number = all_visits_count + 1
+    previous_visit_id = prev_row["visit_id"] if prev_row else None
+    prev_conf = float(prev_row["ai_confidence"]) if prev_row and prev_row["ai_confidence"] is not None else None
+    curr_conf = float(ai_confidence) if ai_confidence is not None else None
+
+    # Calculate comparative delta
+    comparison_delta = None
+    ai_comparison_notes = "Baseline screening visit. No previous radiograph for comparison."
+    if prev_conf is not None and curr_conf is not None:
+        comparison_delta = round(curr_conf - prev_conf, 4)
+        pct_delta = round(comparison_delta * 100, 1)
+
+        if curr_conf < prev_conf:
+            ai_comparison_notes = (
+                f"AI model indicates radiological improvement: confidence decreased by {abs(pct_delta)}% "
+                f"(from {round(prev_conf * 100, 1)}% to {round(curr_conf * 100, 1)}%). "
+                "Observable reduction in parenchymal infiltrates. Subject to doctor confirmation."
+            )
+        elif curr_conf > prev_conf:
+            ai_comparison_notes = (
+                f"AI model indicates persistent or increased lesion density: confidence increased by +{pct_delta}% "
+                f"(from {round(prev_conf * 100, 1)}% to {round(curr_conf * 100, 1)}%). "
+                "Clinician correlation and adherence review strongly recommended."
+            )
+        else:
+            ai_comparison_notes = (
+                f"AI model indicates stable radiologic features (Confidence: {round(curr_conf * 100, 1)}%). "
+                "Correlate with clinical symptom improvement."
+            )
+    elif curr_conf is not None:
+        ai_comparison_notes = f"AI CXR screening: {ai_prediction} ({round(curr_conf * 100, 1)}% confidence). Attending clinician evaluation required."
+
+    # Prescribed medicines
+    if prescribed_medicines is None:
+        prescribed_medicines = get_default_medications_for_stage(clean_stage)
+    meds_json = json.dumps(prescribed_medicines)
+
+    with get_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO patient_visits
+            (visit_id, patient_hash, visit_date, previous_visit_id, symptoms,
+             doctor_observations, ai_prediction, ai_confidence, treatment_stage,
+             doctor_review_status, doctor_validated_change, doctor_email, doctor_name,
+             xray_image_path, heatmap_image_path, prediction_id, visit_number,
+             prescribed_medicines, doctor_treatment_action, ai_comparison_notes,
+             comparison_delta_confidence, comparison_status, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'reviewed', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                visit_id,
+                patient_hash,
+                now_iso[:10],
+                previous_visit_id,
+                symptoms,
+                doctor_observations,
+                ai_prediction,
+                ai_confidence,
+                clean_stage,
+                doctor_validated_change,
+                doctor_email,
+                doctor_name,
+                xray_image_path,
+                heatmap_image_path,
+                prediction_id,
+                visit_number,
+                meds_json,
+                doctor_treatment_action,
+                ai_comparison_notes,
+                comparison_delta,
+                doctor_validated_change,
+                now_iso,
+            ),
+        )
+
+    # Update patient record
+    doctor_cured = 1 if doctor_treatment_action == "completed_regimen" else 0
+    t_status = "completed" if doctor_cured else "active"
+    update_patient_treatment(
+        patient_hash=patient_hash,
+        current_stage=clean_stage,
+        prescribed_medicines=prescribed_medicines,
+        treatment_status=t_status,
+        doctor_confirmed_cured=bool(doctor_cured),
+        doctor_email=doctor_email,
+        doctor_name=doctor_name,
+    )
+
+    # Schedule next follow-up if requested
+    if next_followup_date and next_followup_date.strip():
+        schedule_follow_up(
+            follow_up_id=f"FU-{datetime.now().strftime('%Y%m%d%H%M%S')}",
+            patient_hash=patient_hash,
+            visit_id=visit_id,
+            doctor_email=doctor_email or "doctor@pulmoscan.org",
+            scheduled_at=next_followup_date.strip(),
+            reason=f"Stage {clean_stage} Review & Sputum Check",
+        )
+
+    log_audit_event(
+        user_email=doctor_email or "doctor@pulmoscan.org",
+        user_role="doctor",
+        action="FOLLOWUP_VISIT_RECORDED",
+        resource_id=visit_id,
+        details=(
+            f"Follow-up visit #{visit_number} recorded for {patient_hash}. "
+            f"Doctor Verdict: {doctor_validated_change.upper()}. Stage: {clean_stage}. "
+            f"Action: {doctor_treatment_action}. Attending: {doctor_name}"
+        ),
+    )
+
+    with get_connection() as connection:
+        v_row = connection.execute(
+            "SELECT * FROM patient_visits WHERE visit_id = ?",
+            (visit_id,),
+        ).fetchone()
+    return dict(v_row) if v_row else {}
+
+
+def get_patient_progress_report(patient_hash: str) -> dict[str, Any]:
+    """Generates a complete, tamper-evident clinical progress and recovery report."""
+    patient = get_patient(patient_hash)
+    if not patient:
+        raise KeyError(f"Patient with hash '{patient_hash}' not found.")
+
+    visits = patient.get("visits", [])
+    initial_visit = visits[0] if visits else None
+    latest_visit = visits[-1] if visits else None
+
+    # Compute trajectory
+    trajectory = []
+    for v in visits:
+        trajectory.append({
+            "visit_id": v.get("visit_id"),
+            "visit_number": v.get("visit_number", 1),
+            "date": v.get("visit_date"),
+            "stage": v.get("treatment_stage", 1),
+            "ai_prediction": v.get("ai_prediction", "N/A"),
+            "ai_confidence_pct": round(float(v["ai_confidence"]) * 100, 1) if v.get("ai_confidence") is not None else None,
+            "doctor_validated_change": v.get("doctor_validated_change") or "Pending Review",
+            "doctor_observations": v.get("doctor_observations") or "No observations recorded.",
+            "attending_doctor": v.get("doctor_name") or "Clinician",
+            "xray_url": _normalize_report_img_path(v.get("xray_image_path")),
+            "heatmap_url": _normalize_report_img_path(v.get("heatmap_image_path")),
+        })
+
+    return {
+        "report_id": f"RPT-{patient_hash}-{datetime.now().strftime('%Y%m%d%H%M')}",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "patient": {
+            "patient_hash": patient.get("patient_hash"),
+            "name": patient.get("name"),
+            "age": patient.get("age"),
+            "gender": patient.get("gender"),
+            "contact_phone": patient.get("contact_phone"),
+            "contact_email": patient.get("contact_email"),
+            "medical_history": patient.get("medical_history"),
+            "allergies": patient.get("allergies"),
+            "initial_diagnosis_date": patient.get("initial_diagnosis_date"),
+            "initial_stage": patient.get("initial_stage", 1),
+            "current_stage": patient.get("current_stage", 1),
+            "treatment_status": patient.get("treatment_status", "active"),
+            "doctor_confirmed_cured": bool(patient.get("doctor_confirmed_cured", 0)),
+            "doctor_cured_date": patient.get("doctor_cured_date"),
+            "assigned_doctor_name": patient.get("assigned_doctor_name") or "Attending Pulmonologist",
+            "assigned_doctor_email": patient.get("assigned_doctor_email") or "doctor@pulmoscan.org",
+        },
+        "baseline_summary": {
+            "date": initial_visit.get("visit_date") if initial_visit else patient.get("initial_diagnosis_date"),
+            "ai_prediction": initial_visit.get("ai_prediction") if initial_visit else "TB Positive",
+            "confidence_pct": round(float(initial_visit["ai_confidence"]) * 100, 1) if initial_visit and initial_visit.get("ai_confidence") is not None else None,
+            "xray_url": _normalize_report_img_path(initial_visit.get("xray_image_path")) if initial_visit else None,
+            "heatmap_url": _normalize_report_img_path(initial_visit.get("heatmap_image_path")) if initial_visit else None,
+        },
+        "current_summary": {
+            "date": latest_visit.get("visit_date") if latest_visit else datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+            "stage": patient.get("current_stage", 1),
+            "ai_prediction": latest_visit.get("ai_prediction") if latest_visit else "N/A",
+            "confidence_pct": round(float(latest_visit["ai_confidence"]) * 100, 1) if latest_visit and latest_visit.get("ai_confidence") is not None else None,
+            "validated_change": latest_visit.get("doctor_validated_change") if latest_visit else "Pending",
+            "xray_url": _normalize_report_img_path(latest_visit.get("xray_image_path")) if latest_visit else None,
+            "heatmap_url": _normalize_report_img_path(latest_visit.get("heatmap_image_path")) if latest_visit else None,
+            "prescribed_medicines": patient.get("prescribed_medicines", []),
+        },
+        "trajectory": trajectory,
+        "clinical_disclaimer": (
+            "CONFIDENTIAL CLINICAL DOCUMENT: AI predictions are decision-support outputs based on deep learning "
+            "radiological pattern analysis and do not constitute autonomous medical judgment. Complete cure or treatment "
+            "cessation is determined strictly by the certified attending physician based on holistic clinical, "
+            "radiological, and microbiological evaluation."
+        ),
+    }
+
+
+def _normalize_report_img_path(path: str | None) -> str | None:
+    """Helper to convert local filesystem image paths to web accessible edge-storage URLs."""
+    if not path:
+        return None
+    p = Path(path)
+    if "edge_storage" in str(p) or "inferences" in str(p):
+        return f"/edge-storage/inferences/{p.name}"
+    return path
+
+
+def get_doctor_recovery_overview(doctor_email: str | None = None) -> dict[str, Any]:
+    """Computes high-level stage distribution and treatment progress metrics for the doctor dashboard."""
+    with get_connection() as connection:
+        total_pts = connection.execute("SELECT COUNT(*) AS c FROM patients").fetchone()["c"]
+        cured_pts = connection.execute("SELECT COUNT(*) AS c FROM patients WHERE doctor_confirmed_cured = 1").fetchone()["c"]
+        stage_1 = connection.execute("SELECT COUNT(*) AS c FROM patients WHERE current_stage = 1 AND doctor_confirmed_cured = 0").fetchone()["c"]
+        stage_2 = connection.execute("SELECT COUNT(*) AS c FROM patients WHERE current_stage = 2 AND doctor_confirmed_cured = 0").fetchone()["c"]
+        stage_3 = connection.execute("SELECT COUNT(*) AS c FROM patients WHERE current_stage = 3 AND doctor_confirmed_cured = 0").fetchone()["c"]
+        stage_4 = connection.execute("SELECT COUNT(*) AS c FROM patients WHERE current_stage = 4 AND doctor_confirmed_cured = 0").fetchone()["c"]
+        stage_5 = connection.execute("SELECT COUNT(*) AS c FROM patients WHERE current_stage = 5 OR doctor_confirmed_cured = 1").fetchone()["c"]
+        pending_revs = connection.execute(
+            "SELECT COUNT(DISTINCT patient_hash) AS c FROM patient_visits WHERE doctor_review_status = 'pending'"
+        ).fetchone()["c"]
+        upcoming_fu = connection.execute(
+            "SELECT COUNT(*) AS c FROM follow_ups WHERE status = 'scheduled'"
+        ).fetchone()["c"]
+
+    return {
+        "total_patients": total_pts,
+        "doctor_confirmed_cured": cured_pts,
+        "active_treatments": total_pts - cured_pts,
+        "patients_requiring_review": pending_revs,
+        "upcoming_follow_ups": upcoming_fu,
+        "stage_distribution": {
+            "stage_1_intensive": stage_1,
+            "stage_2_continuation": stage_2,
+            "stage_3_consolidation": stage_3,
+            "stage_4_extended": stage_4,
+            "stage_5_recovery": stage_5,
+        },
+    }
 
 
 def prediction_exists(prediction_id: str) -> bool:
@@ -984,3 +1649,108 @@ def seed_default_users_and_scans() -> None:
             role="hospital",
             hospital_node="node_A",
         )
+
+    # 5. Seed clinical patients if patients table is empty
+    with get_connection() as connection:
+        pt_cnt = connection.execute("SELECT COUNT(*) AS cnt FROM patients").fetchone()["cnt"]
+
+    if pt_cnt == 0:
+        # Populate from existing users who have patient_hash
+        with get_connection() as connection:
+            user_patients = connection.execute(
+                "SELECT email, name, patient_hash FROM users WHERE patient_hash IS NOT NULL"
+            ).fetchall()
+
+        for up in user_patients:
+            register_patient(
+                patient_hash=up["patient_hash"],
+                name=up["name"],
+                contact_email=up["email"],
+                initial_stage=2,
+                assigned_doctor_name="Dr Karthik",
+                assigned_doctor_email="doctor@pulmoscan.org",
+            )
+
+        # Seed clinical benchmark patients demonstrating stage progression
+        register_patient(
+            patient_hash="PT-2026-081",
+            name="Ramesh Kumar",
+            age=45,
+            gender="Male",
+            contact_phone="+91-98765-43210",
+            contact_email="ramesh.k@example.com",
+            emergency_contact="+91-98765-43211 (Spouse)",
+            medical_history="Smoker (10 pack-years), Type 2 Diabetes Mellitus. Primary pulmonary TB.",
+            allergies="Penicillin",
+            initial_stage=1,
+            assigned_doctor_email="doctor@pulmoscan.org",
+            assigned_doctor_name="Dr Karthik",
+        )
+
+        register_patient(
+            patient_hash="PT-2026-094",
+            name="Priya Sharma",
+            age=32,
+            gender="Female",
+            contact_phone="+91-98123-45678",
+            contact_email="priya.s@example.com",
+            emergency_contact="+91-98123-45679 (Father)",
+            medical_history="Cavitary right upper lobe lesion. Sputum smear 3+ at presentation.",
+            allergies="None known",
+            initial_stage=3,
+            assigned_doctor_email="doctor@pulmoscan.org",
+            assigned_doctor_name="Dr Karthik",
+        )
+
+        register_patient(
+            patient_hash="PT-2026-112",
+            name="Anand Varma",
+            age=58,
+            gender="Male",
+            contact_phone="+91-99887-76655",
+            contact_email="anand.v@example.com",
+            emergency_contact="+91-99887-76656",
+            medical_history="Mild apical infiltrate. Excellent treatment adherence.",
+            allergies="Sulfa drugs",
+            initial_stage=2,
+            assigned_doctor_email="doctor@pulmoscan.org",
+            assigned_doctor_name="Dr Karthik",
+        )
+
+        # Seed benchmark clinical trajectory for PT-2026-081
+        with get_connection() as connection:
+            pt_visits = connection.execute("SELECT COUNT(*) AS c FROM patient_visits WHERE patient_hash = 'PT-2026-081'").fetchone()["c"]
+        if pt_visits == 0:
+            create_patient_visit(
+                visit_id="VST-20260901-081001",
+                patient_hash="PT-2026-081",
+                visit_date="2026-09-01",
+                symptoms="Persistent productive cough for 4 weeks, intermittent night sweats, low-grade fever, 3kg weight loss.",
+                doctor_observations="Baseline presentation. Bilateral crepitations on auscultation. Commenced standard HRZE Intensive Phase.",
+                ai_prediction="TB Positive",
+                ai_confidence=0.942,
+                treatment_stage=1,
+                doctor_email="doctor@pulmoscan.org",
+                doctor_name="Dr Karthik",
+                xray_image_path="backend/edge_storage/inferences/154d8683-85b8-48bc-88cc-c5200b89a584.png",
+                heatmap_image_path="backend/edge_storage/inferences/154d8683-85b8-48bc-88cc-c5200b89a584_heatmap.png",
+                prediction_id="154d8683-85b8-48bc-88cc-c5200b89a584",
+                prescribed_medicines=get_default_medications_for_stage(1),
+            )
+            record_patient_followup_visit(
+                patient_hash="PT-2026-081",
+                symptoms="Cough significantly reduced, no fever over the past 14 days, appetite recovering, 1.5kg weight gain.",
+                doctor_observations="Week 8 follow-up radiograph shows marked clearing of right middle lobe consolidation. Cavitary margins regressing.",
+                doctor_validated_change="improved",
+                doctor_treatment_action="advance_stage",
+                treatment_stage=2,
+                prescribed_medicines=get_default_medications_for_stage(2),
+                doctor_email="doctor@pulmoscan.org",
+                doctor_name="Dr Karthik",
+                xray_image_path="backend/edge_storage/inferences/272249aa-9642-4f2f-8f2e-cbd30d1226bd.png",
+                heatmap_image_path="backend/edge_storage/inferences/154d8683-85b8-48bc-88cc-c5200b89a584_heatmap.png",
+                prediction_id="272249aa-9642-4f2f-8f2e-cbd30d1226bd",
+                ai_prediction="TB Positive",
+                ai_confidence=0.718,
+                next_followup_date="2026-12-15",
+            )

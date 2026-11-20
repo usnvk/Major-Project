@@ -571,3 +571,103 @@ export const fetchFLEvents = async () => {
   }
 };
 
+/**
+ * ─────────────────────────────────────────────────────────────────────────────
+ * PATIENT TREATMENT & RECOVERY MONITORING API
+ * ─────────────────────────────────────────────────────────────────────────────
+ */
+
+export const fetchPatients = async (params = {}) => {
+  try {
+    const response = await apiClient.get('/patients', { params });
+    return { success: true, data: response.data };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.response?.data?.detail || error.message,
+    };
+  }
+};
+
+export const fetchPatientDetails = async (patientHash) => {
+  try {
+    const response = await apiClient.get(`/patients/${encodeURIComponent(patientHash)}`);
+    return { success: true, data: response.data };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.response?.data?.detail || error.message,
+    };
+  }
+};
+
+export const registerPatient = async (payload) => {
+  try {
+    const response = await apiClient.post('/patients/register', payload);
+    return { success: true, data: response.data };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.response?.data?.detail || error.message,
+    };
+  }
+};
+
+export const updatePatientTreatment = async (patientHash, payload) => {
+  try {
+    const response = await apiClient.put(`/patients/${encodeURIComponent(patientHash)}/treatment`, payload);
+    return { success: true, data: response.data };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.response?.data?.detail || error.message,
+    };
+  }
+};
+
+export const recordFollowUpVisit = async (patientHash, formData) => {
+  try {
+    const response = await apiClient.post(
+      `/patients/${encodeURIComponent(patientHash)}/followup-visit`,
+      formData,
+      {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+      }
+    );
+    return { success: true, data: response.data };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.response?.data?.detail || error.message,
+    };
+  }
+};
+
+export const fetchPatientProgressReport = async (patientHash) => {
+  try {
+    const response = await apiClient.get(`/patients/${encodeURIComponent(patientHash)}/progress-report`);
+    return { success: true, data: response.data };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.response?.data?.detail || error.message,
+    };
+  }
+};
+
+export const fetchDoctorRecoveryOverview = async (doctorEmail = null) => {
+  try {
+    const params = doctorEmail ? { doctor_email: doctorEmail } : {};
+    const response = await apiClient.get('/analytics/doctor-overview', { params });
+    return { success: true, data: response.data };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.response?.data?.detail || error.message,
+    };
+  }
+};
+
+

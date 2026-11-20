@@ -10,6 +10,7 @@ import ResultPage from './pages/ResultPage';
 import HistoryPage from './pages/HistoryPage';
 import FederatedMonitorPage from './pages/FederatedMonitorPage';
 import HospitalDashboard from './pages/HospitalDashboard';
+import TreatmentRecoveryPage from './pages/TreatmentRecoveryPage';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { fetchScans } from './services/api';
 
@@ -42,7 +43,12 @@ function AppContent() {
   useEffect(() => {
     if (!user) return;
     if (role === 'admin') {
-      if (activeTab !== 'admin-panel' && activeTab !== 'federated-network' && activeTab !== 'history') {
+      if (
+        activeTab !== 'admin-panel' &&
+        activeTab !== 'federated-network' &&
+        activeTab !== 'treatment-hub' &&
+        activeTab !== 'history'
+      ) {
         setActiveTab('admin-panel');
       }
     } else if (role === 'patient') {
@@ -57,6 +63,7 @@ function AppContent() {
       // doctor
       if (
         activeTab !== 'dashboard' &&
+        activeTab !== 'treatment-hub' &&
         activeTab !== 'upload' &&
         activeTab !== 'result' &&
         activeTab !== 'history' &&
@@ -180,6 +187,11 @@ function AppContent() {
             <UploadPage
               onPredictionSuccess={handlePredictionSuccess}
             />
+          )}
+
+          {/* ── Stage-Wise TB Patient Treatment & Recovery Monitoring Hub ── */}
+          {(role === 'doctor' || role === 'admin') && activeTab === 'treatment-hub' && (
+            <TreatmentRecoveryPage onNavigate={setActiveTab} />
           )}
 
           {/* ── Records & Audit History (Role-filtered data from SQLite) ── */}
