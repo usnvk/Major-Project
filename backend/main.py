@@ -202,6 +202,7 @@ class FLRoundStartInput(BaseModel):
     dp: bool = True
     simulate: bool = False
     rounds: int = 1
+    min_nodes: int = 1  # Minimum nodes required to start (default 1)
 
 
 class FLHeartbeatInput(BaseModel):
@@ -1115,6 +1116,7 @@ def start_fl_round(payload: FLRoundStartInput):
         dp=payload.dp,
         simulate=payload.simulate,
         rounds=payload.rounds,
+        min_nodes=payload.min_nodes,
     )
     if res.get("status") == "error":
         raise HTTPException(status_code=400, detail=res.get("message"))
@@ -1246,15 +1248,28 @@ def get_fl_global_model_weights(version: str | None = None):
 def get_fl_cluster_info():
     """Returns cluster network configuration and connection instructions for client laptops."""
     server_ip = _get_local_ip()
+    online_nodes = {
+        nid: node for nid, node in fl_orchestrator.nodes.items()
+        if node.get("status") == "online"
+    }
     return {
         "server_ip": server_ip,
         "rest_api_url": f"http://{server_ip}:8000",
         "frontend_url": f"http://{server_ip}:5173",
         "active_global_version": fl_orchestrator.global_version,
         "current_round": fl_orchestrator.current_round,
-        "commands": {
-            "hospital_A": f"python Model/run_hospital_node.py --node_id node_A --api_server http://{server_ip}:8000",
-            "hospital_B": f"python Model/run_hospital_node.py --node_id node_B --api_server http://{server_ip}:8000",
+        "online_node_count": len(online_nodes),
+        "online_nodes": list(online_nodes.keys()),
+        "usage": (
+            f"python Model/run_hospital_node.py "
+            f"--node_id <your_node_id> "
+            f"--api_server http://{server_ip}:8000 "
+            f"--demo"
+        ),
+        "example_commands": {
+            "hospital_A": f"python Model/run_hospital_node.py --node_id node_A --api_server http://{server_ip}:8000 --demo",
+            "hospital_B": f"python Model/run_hospital_node.py --node_id node_B --api_server http://{server_ip}:8000 --demo",
+            "hospital_C": f"python Model/run_hospital_node.py --node_id node_C --api_server http://{server_ip}:8000 --demo",
         },
     }
 

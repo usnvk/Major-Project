@@ -263,7 +263,7 @@ def load_hospital_dataset(path_input: Optional[str], default_dir: Path, tfms) ->
 
 def main():
     parser = argparse.ArgumentParser(description="Edge Hospital Federated Learning Node (Laptop B / Laptop C)")
-    parser.add_argument("--node_id", type=str, required=True, choices=["node_A", "node_B", "node_C"], help="Hospital node ID")
+    parser.add_argument("--node_id", type=str, required=True, help="Hospital node ID (e.g. node_A, node_B, node_C, hospital_1, etc.)")
     parser.add_argument("--server", type=str, default="localhost:8099", help="Central FL Server address (e.g. 192.168.1.XX:8099)")
     parser.add_argument("--api_server", type=str, default="http://localhost:8000", help="Central REST API base URL (e.g. http://192.168.1.XX:8000)")
     parser.add_argument("--data_dir", type=str, default=None, help="Explicit path to custom local CXR dataset directory or file")
@@ -283,8 +283,10 @@ def main():
         "node_B": "HOSPITAL B — RURAL DISTRICT CLINIC",
         "node_C": "HOSPITAL C — METRO RESEARCH INSTITUTE",
     }
-    hospital_name = node_names.get(args.node_id, args.node_id.upper())
-    accent = CYAN if args.node_id == "node_A" else GREEN
+    hospital_name = node_names.get(args.node_id, f"HOSPITAL {args.node_id.upper().replace('NODE_', '')} — EDGE CLINIC")
+    _accent_cycle = [CYAN, GREEN, "\033[95m", "\033[93m", "\033[96m"]  # cyan, green, magenta, yellow, cyan
+    _node_order = ["node_A", "node_B", "node_C", "node_D", "node_E"]
+    accent = _accent_cycle[_node_order.index(args.node_id) % len(_accent_cycle)] if args.node_id in _node_order else GREEN
 
     # 1. Print Master Terminal Header Banner (Master Prompt Sections 27 & 28)
     print("\n" + "=" * 58)
@@ -309,7 +311,10 @@ def main():
         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
     ])
 
-    default_dir = MODEL_DIR / "data" / ("hospital_A" if args.node_id == "node_A" else "hospital_B")
+    _node_data_name = args.node_id.replace("node_", "hospital_")
+    default_dir = MODEL_DIR / "data" / _node_data_name
+    if not default_dir.exists():
+        default_dir = MODEL_DIR / "data" / "hospital_B"  # fallback to hospital_B data
     if not default_dir.exists():
         default_dir = MODEL_DIR / "data" / "valid_chest_xray" / "train"
 
@@ -420,7 +425,7 @@ def main():
                         print(f"\n{CYAN}{BOLD}[TRIGGER] ⚡ [ENTER] pressed in terminal! Triggering Federated Round across cluster...{RESET}")
                         trigger_res = post_json(
                             f"{args.api_server}/api/fl/round/start",
-                            {"aggregation": "FedAvg", "demo": args.demo, "dp": args.dp, "simulate": False},
+                            {"aggregation": "FedAvg", "demo": args.demo, "dp": args.dp, "simulate": False, "min_nodes": 1},
                         )
                         if trigger_res and trigger_res.get("status") == "round_started":
                             print(f"{GREEN}[TRIGGER] Central Server accepted! Round #{trigger_res.get('round')} started across cluster! ✓{RESET}\n")

@@ -1,19 +1,14 @@
 import React, { useState } from 'react';
 import {
-  ShieldCheck,
   Server,
   Cpu,
   ArrowRight,
   CheckCircle2,
   Lock,
   Layers,
-  Database,
   RefreshCw,
   X,
-  AlertTriangle,
   UploadCloud,
-  FileCheck,
-  Activity,
   Terminal,
 } from 'lucide-react';
 
@@ -31,62 +26,62 @@ export default function FLOrchestrationModal({
   const stage = liveStatus?.stage || 'idle';
   const roundNum = liveStatus?.current_round || 1;
   const roundId = liveStatus?.round_id || `FL-2026-${String(roundNum).padStart(3, '0')}`;
-  const globalVersion = liveStatus?.global_model_version || 'v2.1';
+  const globalVersion = liveStatus?.global_model_version || 'v1';
   const aggMethod = liveStatus?.aggregation_method || 'FedAvg';
   const nodes = liveStatus?.nodes || {};
-  const nodeA = nodes['node_A'] || {};
-  const nodeB = nodes['node_B'] || {};
   const updates = liveStatus?.round_updates || {};
-  const updateA = updates['node_A'] || null;
-  const updateB = updates['node_B'] || null;
+  const participants = liveStatus?.round_participants || Object.keys(nodes);
 
-  // Progression index: 1 to 5 (Section 10)
+  // Determine active step
   let activeStep = 1;
   if (stage === 'broadcasting') activeStep = 1;
   else if (stage === 'local_training') activeStep = 2;
-  else if (stage === 'receiving_updates' || (updateA && !updateB) || (updateB && !updateA)) activeStep = 3;
+  else if (stage === 'receiving_updates' || (Object.keys(updates).length > 0 && Object.keys(updates).length < participants.length)) activeStep = 3;
   else if (stage === 'aggregating') activeStep = 4;
-  else if (stage === 'model_updated' || stage === 'distributing' || stage === 'completed') activeStep = 5;
+  else if (stage === 'completed' || stage === 'model_updated' || stage === 'distributing') activeStep = 5;
 
   const isCompleted = stage === 'completed';
+  const receivedCount = Object.keys(updates).length;
+  const totalExpected = participants.length || 1;
 
-  // Extract latest training progress events for Hospital A and Hospital B
-  const trainingEventsA = events.filter((e) => e.payload?.node_id === 'node_A' && e.type === 'LOCAL_TRAINING_PROGRESS');
-  const latestProgressA = trainingEventsA[trainingEventsA.length - 1]?.payload || null;
+  // Per-node training progress from events
+  const getNodeProgress = (nodeId) => {
+    const nodeEvents = events.filter(
+      (e) => e.payload?.node_id === nodeId && e.type === 'LOCAL_TRAINING_PROGRESS'
+    );
+    const latest = nodeEvents[nodeEvents.length - 1]?.payload || null;
+    const update = updates[nodeId] || null;
+    const nodeInfo = nodes[nodeId] || {};
 
-  const trainingEventsB = events.filter((e) => e.payload?.node_id === 'node_B' && e.type === 'LOCAL_TRAINING_PROGRESS');
-  const latestProgressB = trainingEventsB[trainingEventsB.length - 1]?.payload || null;
+    return {
+      batch: latest?.batch || (update ? (latest?.total_batches || 4) : (activeStep >= 2 ? 1 : 0)),
+      totalBatches: latest?.total_batches || 4,
+      loss: latest?.loss ?? update?.loss ?? nodeInfo.last_loss ?? null,
+      acc: latest?.accuracy ?? update?.accuracy ?? nodeInfo.last_acc ?? null,
+      samples: update?.num_samples || nodeInfo.dataset_size || 0,
+      epsilon: update?.epsilon ?? nodeInfo.dp_epsilon ?? null,
+      submitted: Boolean(update),
+      sizeMb: update?.size_mb ?? null,
+    };
+  };
 
-  const batchA = latestProgressA?.batch || (updateA ? 4 : (activeStep >= 2 ? 1 : 0));
-  const totalBatchesA = latestProgressA?.total_batches || 4;
-  const lossA = latestProgressA?.loss ?? updateA?.loss ?? nodeA.last_loss ?? null;
-  const accA = latestProgressA?.accuracy ?? updateA?.accuracy ?? nodeA.last_acc ?? null;
+  // Total samples for FedAvg formula
+  const totalSamples = participants.reduce((sum, nid) => {
+    const info = nodes[nid] || {};
+    const update = updates[nid];
+    return sum + (update?.num_samples || info.dataset_size || 0);
+  }, 0);
 
-  const batchB = latestProgressB?.batch || (updateB ? 4 : (activeStep >= 2 ? 1 : 0));
-  const totalBatchesB = latestProgressB?.total_batches || 4;
-  const lossB = latestProgressB?.loss ?? updateB?.loss ?? nodeB.last_loss ?? null;
-  const accB = latestProgressB?.accuracy ?? updateB?.accuracy ?? nodeB.last_acc ?? null;
-
-  // DP-SGD epsilon
-  const epsA = updateA?.epsilon ?? nodeA.dp_epsilon ?? null;
-  const epsB = updateB?.epsilon ?? nodeB.dp_epsilon ?? null;
-
-  // Aggregation weights calculation
-  const nA = updateA?.num_samples || nodeA.dataset_size || 120;
-  const nB = updateB?.num_samples || nodeB.dataset_size || 120;
-  const N = nA + nB;
-  const wA = (nA / N).toFixed(4);
-  const wB = (nB / N).toFixed(4);
-
-  // Model version bump
-  const nextVersionNum = parseInt(globalVersion.replace('v', ''), 10) + 1;
-  const nextVersion = `v${nextVersionNum || 2.2}`;
+  // Last completed round aggregation event
+  const aggEvent = [...events]
+    .reverse()
+    .find((e) => e.type === 'AGGREGATION_COMPLETED');
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-slate-900/50 backdrop-blur-xs animate-fade-in overflow-y-auto">
       <div className="bg-white rounded-2xl max-w-4xl w-full shadow-xl border border-[#E2E8F0] overflow-hidden transform transition-all my-auto max-h-[92vh] flex flex-col">
-        
-        {/* ── Top Modal Navigation & Header (Section 10) ── */}
+
+        {/* Header */}
         <div className="bg-white p-5 sm:p-6 flex items-center justify-between border-b border-[#E2E8F0] shrink-0">
           <div className="space-y-1">
             <div className="inline-flex items-center space-x-1.5 bg-[#EFF6FF] text-[#2563EB] text-xs font-semibold px-2.5 py-0.5 rounded-full border border-[#DBEAFE]">
@@ -128,22 +123,21 @@ export default function FLOrchestrationModal({
           </div>
         </div>
 
-        {/* ── Privacy Boundary Banner (Section 14 & 2) ── */}
+        {/* Privacy Banner */}
         <div className="bg-[#F0FDFA] px-5 py-2.5 border-b border-[#CCFBF1] flex flex-col sm:flex-row items-center justify-between gap-2 text-xs shrink-0 text-[#0F766E]">
           <div className="flex items-center space-x-1.5 font-medium">
             <Lock className="w-3.5 h-3.5 text-[#0D9488]" />
             <span>Raw Patient CXR Images: <b>Never leave hospital edge laptops</b></span>
           </div>
-
           <div className="text-[11px] font-semibold text-[#0D9488] bg-white px-2.5 py-0.5 rounded border border-[#CCFBF1]">
             ✓ Serialized weight vectors only
           </div>
         </div>
 
-        {/* ── Scrollable Body Area ── */}
+        {/* Body */}
         <div className="p-6 overflow-y-auto space-y-5 flex-1 bg-[#F8FAFC]">
-          
-          {/* ── 5-Stage Stepper Header (Section 10) ── */}
+
+          {/* 5-Step Stepper */}
           <div className="grid grid-cols-5 gap-2 text-center">
             {[
               { step: 1, label: 'Broadcast Model', icon: Server },
@@ -186,41 +180,35 @@ export default function FLOrchestrationModal({
             })}
           </div>
 
-          {/* ── STEP 1: Global Model Broadcast ── */}
+          {/* STEP 1: Broadcast */}
           <div className="bg-white p-4 rounded-xl border border-[#E2E8F0] shadow-xs space-y-2">
             <div className="flex items-center justify-between">
               <div className="flex items-center space-x-2.5">
-                <span className="text-xs font-bold text-[#2563EB] bg-[#EFF6FF] px-2 py-0.5 rounded border border-[#DBEAFE]">
-                  STEP 1
-                </span>
+                <span className="text-xs font-bold text-[#2563EB] bg-[#EFF6FF] px-2 py-0.5 rounded border border-[#DBEAFE]">STEP 1</span>
                 <h4 className="text-sm font-bold text-[#0F172A]">Broadcast Global Model</h4>
               </div>
-
               {activeStep > 1 || isCompleted ? (
                 <span className="text-xs font-semibold text-[#16A34A] bg-[#F0FDF4] px-2.5 py-0.5 rounded-full border border-[#DCFCE7] flex items-center gap-1">
                   <CheckCircle2 className="w-3.5 h-3.5" /> Global Model {globalVersion} Distributed
                 </span>
               ) : (
                 <span className="text-xs font-semibold text-[#2563EB] bg-[#EFF6FF] px-2.5 py-0.5 rounded-full border border-[#DBEAFE] flex items-center gap-1">
-                  <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Distributing...
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Distributing to {totalExpected} node(s)...
                 </span>
               )}
             </div>
             <p className="text-xs text-[#64748B]">
-              Central server distributes global ResNet-18 weights to Hospital A and Hospital B over encrypted LAN transport.
+              Central server distributes global ResNet-18 weights to all {totalExpected} participating hospital node(s).
             </p>
           </div>
 
-          {/* ── STEP 2: Local Edge Training (Section 10) ── */}
+          {/* STEP 2: Local Training — dynamic nodes */}
           <div className="bg-white p-4 rounded-xl border border-[#E2E8F0] shadow-xs space-y-3">
             <div className="flex items-center justify-between">
               <div className="flex items-center space-x-2.5">
-                <span className="text-xs font-bold text-[#2563EB] bg-[#EFF6FF] px-2 py-0.5 rounded border border-[#DBEAFE]">
-                  STEP 2
-                </span>
+                <span className="text-xs font-bold text-[#2563EB] bg-[#EFF6FF] px-2 py-0.5 rounded border border-[#DBEAFE]">STEP 2</span>
                 <h4 className="text-sm font-bold text-[#0F172A]">Independent Edge Training</h4>
               </div>
-
               {activeStep > 2 || isCompleted ? (
                 <span className="text-xs font-semibold text-[#16A34A] bg-[#F0FDF4] px-2.5 py-0.5 rounded-full border border-[#DCFCE7] flex items-center gap-1">
                   <CheckCircle2 className="w-3.5 h-3.5" /> Training Completed
@@ -234,126 +222,124 @@ export default function FLOrchestrationModal({
               )}
             </div>
 
-            {/* Hospital Training Cards */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
-              {/* Hospital A */}
-              <div className="p-3.5 rounded-xl bg-[#F8FAFC] border border-[#E2E8F0] space-y-2">
-                <div className="flex items-center justify-between text-xs">
-                  <span className="font-bold text-[#0F172A]">HOSPITAL A</span>
-                  <span className="text-[11px] font-semibold text-[#16A34A]">
-                    {updateA || activeStep > 2 ? '✓ Complete' : activeStep === 2 ? `Batch ${batchA}/${totalBatchesA}` : 'Ready'}
-                  </span>
+            {/* Dynamic node training cards — 1 to N */}
+            <div
+              className={`grid gap-3 ${
+                participants.length <= 2
+                  ? 'grid-cols-1 md:grid-cols-2'
+                  : participants.length <= 3
+                  ? 'grid-cols-1 md:grid-cols-3'
+                  : 'grid-cols-2 md:grid-cols-4'
+              }`}
+            >
+              {participants.length === 0 ? (
+                <div className="col-span-2 p-3 rounded-xl bg-[#F8FAFC] border border-[#E2E8F0] text-xs text-[#64748B] text-center">
+                  Waiting for nodes to register...
                 </div>
+              ) : (
+                participants.map((nodeId, i) => {
+                  const prog = getNodeProgress(nodeId);
+                  const colors = ['bg-[#2563EB]', 'bg-[#0D9488]', 'bg-[#7C3AED]', 'bg-[#EA580C]', 'bg-[#0891B2]'];
+                  const barColor = colors[i % colors.length];
+                  return (
+                    <div key={nodeId} className="p-3.5 rounded-xl bg-[#F8FAFC] border border-[#E2E8F0] space-y-2">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="font-bold text-[#0F172A]">{nodeId.toUpperCase()}</span>
+                        <span className="text-[11px] font-semibold text-[#16A34A]">
+                          {prog.submitted || activeStep > 2
+                            ? '✓ Complete'
+                            : activeStep === 2
+                            ? `Batch ${prog.batch}/${prog.totalBatches}`
+                            : 'Ready'}
+                        </span>
+                      </div>
 
-                <div className="w-full bg-slate-200 h-2 rounded-full overflow-hidden">
-                  <div
-                    className="bg-[#2563EB] h-full rounded-full transition-all duration-300"
-                    style={{ width: `${Math.min(100, (batchA / totalBatchesA) * 100)}%` }}
-                  />
-                </div>
+                      <div className="w-full bg-slate-200 h-2 rounded-full overflow-hidden">
+                        <div
+                          className={`${barColor} h-full rounded-full transition-all duration-300`}
+                          style={{
+                            width: `${Math.min(100, ((prog.submitted || activeStep > 2 ? prog.totalBatches : prog.batch) / prog.totalBatches) * 100)}%`,
+                          }}
+                        />
+                      </div>
 
-                <div className="grid grid-cols-3 gap-2 text-xs text-[#64748B] pt-1 border-t border-[#E2E8F0]">
-                  <div>
-                    <span className="text-[10px] block">Dataset</span>
-                    <span className="font-semibold text-[#0F172A]">{nA} CXRs</span>
-                  </div>
-                  <div>
-                    <span className="text-[10px] block">Loss</span>
-                    <span className="font-mono font-semibold text-[#0F172A]">{lossA != null ? lossA : '—'}</span>
-                  </div>
-                  <div>
-                    <span className="text-[10px] block">Accuracy</span>
-                    <span className="font-mono font-semibold text-[#16A34A]">{accA != null ? `${accA}%` : '—'}</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Hospital B */}
-              <div className="p-3.5 rounded-xl bg-[#F8FAFC] border border-[#E2E8F0] space-y-2">
-                <div className="flex items-center justify-between text-xs">
-                  <span className="font-bold text-[#0F172A]">HOSPITAL B</span>
-                  <span className="text-[11px] font-semibold text-[#16A34A]">
-                    {updateB || activeStep > 2 ? '✓ Complete' : activeStep === 2 ? `Batch ${batchB}/${totalBatchesB}` : 'Ready'}
-                  </span>
-                </div>
-
-                <div className="w-full bg-slate-200 h-2 rounded-full overflow-hidden">
-                  <div
-                    className="bg-[#0D9488] h-full rounded-full transition-all duration-300"
-                    style={{ width: `${Math.min(100, (batchB / totalBatchesB) * 100)}%` }}
-                  />
-                </div>
-
-                <div className="grid grid-cols-3 gap-2 text-xs text-[#64748B] pt-1 border-t border-[#E2E8F0]">
-                  <div>
-                    <span className="text-[10px] block">Dataset</span>
-                    <span className="font-semibold text-[#0F172A]">{nB} CXRs</span>
-                  </div>
-                  <div>
-                    <span className="text-[10px] block">Loss</span>
-                    <span className="font-mono font-semibold text-[#0F172A]">{lossB != null ? lossB : '—'}</span>
-                  </div>
-                  <div>
-                    <span className="text-[10px] block">Accuracy</span>
-                    <span className="font-mono font-semibold text-[#16A34A]">{accB != null ? `${accB}%` : '—'}</span>
-                  </div>
-                </div>
-              </div>
+                      <div className="grid grid-cols-3 gap-2 text-xs text-[#64748B] pt-1 border-t border-[#E2E8F0]">
+                        <div>
+                          <span className="text-[10px] block">Dataset</span>
+                          <span className="font-semibold text-[#0F172A]">{prog.samples} CXRs</span>
+                        </div>
+                        <div>
+                          <span className="text-[10px] block">Loss</span>
+                          <span className="font-mono font-semibold text-[#0F172A]">
+                            {prog.loss != null ? prog.loss : '—'}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-[10px] block">Accuracy</span>
+                          <span className="font-mono font-semibold text-[#16A34A]">
+                            {prog.acc != null ? `${prog.acc}%` : '—'}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
             </div>
           </div>
 
-          {/* ── STEP 3: Waiting for Model Updates (Section 10) ── */}
+          {/* STEP 3: Model Updates */}
           <div className="bg-white p-4 rounded-xl border border-[#E2E8F0] shadow-xs space-y-3">
             <div className="flex items-center justify-between">
               <div className="flex items-center space-x-2.5">
-                <span className="text-xs font-bold text-[#2563EB] bg-[#EFF6FF] px-2 py-0.5 rounded border border-[#DBEAFE]">
-                  STEP 3
-                </span>
+                <span className="text-xs font-bold text-[#2563EB] bg-[#EFF6FF] px-2 py-0.5 rounded border border-[#DBEAFE]">STEP 3</span>
                 <h4 className="text-sm font-bold text-[#0F172A]">Waiting for Model Updates</h4>
               </div>
-
-              <span className={`text-xs font-semibold px-2.5 py-0.5 rounded-full border ${
-                activeStep >= 4 || isCompleted
-                  ? 'bg-[#F0FDF4] text-[#16A34A] border-[#DCFCE7]'
-                  : 'bg-[#FFFBEB] text-[#F59E0B] border-[#FEF3C7]'
-              }`}>
-                {activeStep >= 4 || isCompleted ? '✓ 2 / 2 Updates Received' : 'Waiting for Updates'}
+              <span
+                className={`text-xs font-semibold px-2.5 py-0.5 rounded-full border ${
+                  activeStep >= 4 || isCompleted
+                    ? 'bg-[#F0FDF4] text-[#16A34A] border-[#DCFCE7]'
+                    : 'bg-[#FFFBEB] text-[#F59E0B] border-[#FEF3C7]'
+                }`}
+              >
+                {activeStep >= 4 || isCompleted
+                  ? `✓ ${receivedCount} / ${totalExpected} Updates Received`
+                  : `Waiting (${receivedCount} / ${totalExpected})`}
               </span>
             </div>
 
-            <div className="grid grid-cols-2 gap-3 text-xs">
-              <div className="p-3 rounded-lg bg-[#F8FAFC] border border-[#E2E8F0] flex items-center justify-between">
-                <div>
-                  <span className="font-semibold text-[#0F172A] block">Hospital A Update</span>
-                  <span className="text-[11px] text-[#64748B]">Size: {updateA?.size_mb ?? 11.2} MB</span>
-                </div>
-                <span className="text-[#16A34A] font-bold text-xs">
-                  {updateA || activeStep >= 4 ? '✓ Received' : '● Uploading'}
-                </span>
-              </div>
-
-              <div className="p-3 rounded-lg bg-[#F8FAFC] border border-[#E2E8F0] flex items-center justify-between">
-                <div>
-                  <span className="font-semibold text-[#0F172A] block">Hospital B Update</span>
-                  <span className="text-[11px] text-[#64748B]">Size: {updateB?.size_mb ?? 11.2} MB</span>
-                </div>
-                <span className="text-[#16A34A] font-bold text-xs">
-                  {updateB || activeStep >= 4 ? '✓ Received' : '● Uploading'}
-                </span>
-              </div>
+            <div
+              className={`grid gap-3 ${
+                participants.length <= 3 ? 'grid-cols-1 sm:grid-cols-2 md:grid-cols-3' : 'grid-cols-2 md:grid-cols-4'
+              }`}
+            >
+              {participants.map((nodeId) => {
+                const update = updates[nodeId];
+                const received = Boolean(update) || activeStep >= 4;
+                return (
+                  <div key={nodeId} className="p-3 rounded-lg bg-[#F8FAFC] border border-[#E2E8F0] flex items-center justify-between">
+                    <div>
+                      <span className="font-semibold text-[#0F172A] block text-xs">{nodeId.toUpperCase()}</span>
+                      <span className="text-[11px] text-[#64748B]">
+                        {update?.size_mb != null ? `${update.size_mb} MB` : '—'}
+                      </span>
+                    </div>
+                    <span className={`text-xs font-bold ${received ? 'text-[#16A34A]' : 'text-[#F59E0B]'}`}>
+                      {received ? '✓ Received' : '⟳ Uploading'}
+                    </span>
+                  </div>
+                );
+              })}
             </div>
           </div>
 
-          {/* ── STEP 4: Aggregation (FedAvg) (Section 10) ── */}
+          {/* STEP 4: FedAvg Aggregation */}
           <div className="bg-white p-4 rounded-xl border border-[#E2E8F0] shadow-xs space-y-3">
             <div className="flex items-center justify-between">
               <div className="flex items-center space-x-2.5">
-                <span className="text-xs font-bold text-[#2563EB] bg-[#EFF6FF] px-2 py-0.5 rounded border border-[#DBEAFE]">
-                  STEP 4
-                </span>
+                <span className="text-xs font-bold text-[#2563EB] bg-[#EFF6FF] px-2 py-0.5 rounded border border-[#DBEAFE]">STEP 4</span>
                 <h4 className="text-sm font-bold text-[#0F172A]">Central Model Aggregation ({aggMethod})</h4>
               </div>
-
               {activeStep > 4 || isCompleted ? (
                 <span className="text-xs font-semibold text-[#16A34A] bg-[#F0FDF4] px-2.5 py-0.5 rounded-full border border-[#DCFCE7]">
                   ✓ Aggregation Complete
@@ -368,26 +354,27 @@ export default function FLOrchestrationModal({
             </div>
 
             <div className="p-3 bg-slate-50 rounded-lg border border-[#E2E8F0] text-xs font-mono text-[#0F172A] space-y-1">
-              <div className="text-[11px] text-[#64748B]">Weighted Layer Aggregation Formula:</div>
+              <div className="text-[11px] text-[#64748B]">Sample-Weighted FedAvg Formula ({totalExpected} node(s)):</div>
               <div className="font-bold text-[#2563EB]">
-                W_global = ({nA}/{N})·W_A + ({nB}/{N})·W_B
+                W_global = Σ (n_i / N) · W_i
               </div>
               <div className="text-[11px] text-[#64748B]">
-                Hospital A weight: <b>{wA}</b> | Hospital B weight: <b>{wB}</b> | Total: <b>{N} CXRs</b>
+                {participants.map((nid) => {
+                  const prog = getNodeProgress(nid);
+                  const w = totalSamples > 0 ? (prog.samples / totalSamples).toFixed(4) : '0.0000';
+                  return `${nid}: ${prog.samples}/${totalSamples} = ${w}`;
+                }).join(' | ')} | Total: {totalSamples} CXRs
               </div>
             </div>
           </div>
 
-          {/* ── STEP 5: Global Model Updated (Section 10 & 13) ── */}
+          {/* STEP 5: Global Model Updated */}
           <div className="bg-white p-4 rounded-xl border border-[#E2E8F0] shadow-xs space-y-3">
             <div className="flex items-center justify-between">
               <div className="flex items-center space-x-2.5">
-                <span className="text-xs font-bold text-[#2563EB] bg-[#EFF6FF] px-2 py-0.5 rounded border border-[#DBEAFE]">
-                  STEP 5
-                </span>
+                <span className="text-xs font-bold text-[#2563EB] bg-[#EFF6FF] px-2 py-0.5 rounded border border-[#DBEAFE]">STEP 5</span>
                 <h4 className="text-sm font-bold text-[#0F172A]">Global Model Updated</h4>
               </div>
-
               {isCompleted ? (
                 <span className="text-xs font-bold text-[#16A34A] bg-[#F0FDF4] px-2.5 py-0.5 rounded-full border border-[#DCFCE7]">
                   ✓ Round Complete
@@ -399,12 +386,27 @@ export default function FLOrchestrationModal({
 
             <div className="p-4 rounded-xl bg-[#EFF6FF]/50 border border-[#DBEAFE] flex items-center justify-between">
               <div>
-                <span className="text-[10px] text-[#64748B] uppercase font-bold block">Model Version Transition</span>
-                <div className="text-lg font-bold text-[#0F172A] flex items-center gap-2">
-                  <span className="text-[#64748B]">{globalVersion}</span>
-                  <ArrowRight className="w-4 h-4 text-[#2563EB]" />
-                  <span className="text-[#2563EB]">{nextVersion}</span>
-                </div>
+                {isCompleted ? (
+                  <>
+                    <span className="text-[10px] text-[#64748B] uppercase font-bold block">Aggregation Result</span>
+                    <div className="text-lg font-bold text-[#16A34A] mt-1 flex items-center gap-2">
+                      <CheckCircle2 className="w-5 h-5" />
+                      <span>Central Model Updated Successfully</span>
+                    </div>
+                    {aggEvent?.payload?.checkpoint && (
+                      <div className="text-[11px] text-[#64748B] mt-1 font-mono">
+                        Checkpoint: {aggEvent.payload.checkpoint}
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <span className="text-[10px] text-[#64748B] uppercase font-bold block">Pending</span>
+                    <div className="text-sm font-semibold text-[#64748B] mt-1">
+                      Waiting for aggregation to complete...
+                    </div>
+                  </>
+                )}
               </div>
 
               <div className="text-right text-xs">
@@ -412,13 +414,15 @@ export default function FLOrchestrationModal({
                 <span className="font-bold text-[#16A34A] text-sm">
                   {liveStatus?.validation_accuracy != null
                     ? `${liveStatus.validation_accuracy}%`
+                    : aggEvent?.payload?.weighted_accuracy != null
+                    ? `${aggEvent.payload.weighted_accuracy}%`
                     : '—'}
                 </span>
               </div>
             </div>
           </div>
 
-          {/* ── Telemetry Event Log Stream ── */}
+          {/* Telemetry Log */}
           {showEventLog && (
             <div className="bg-white rounded-xl border border-[#E2E8F0] p-4 text-xs font-mono space-y-2">
               <div className="flex items-center justify-between text-[#64748B] border-b border-[#E2E8F0] pb-2">
@@ -426,10 +430,12 @@ export default function FLOrchestrationModal({
                 <span>{events.length} Events</span>
               </div>
               <div className="max-h-40 overflow-y-auto space-y-1">
-                {events.slice(-10).reverse().map((evt) => (
+                {events.slice(-15).reverse().map((evt) => (
                   <div key={evt.id} className="py-1 border-b border-slate-100 flex justify-between gap-2">
-                    <span className="text-[#2563EB] font-semibold">[{evt.type}]</span>
-                    <span className="text-[#64748B] truncate max-w-xs">{JSON.stringify(evt.payload || {})}</span>
+                    <span className="text-[#2563EB] font-semibold shrink-0">[{evt.type}]</span>
+                    <span className="text-[#64748B] truncate max-w-xs">
+                      {JSON.stringify(evt.payload || {})}
+                    </span>
                   </div>
                 ))}
               </div>
@@ -437,10 +443,12 @@ export default function FLOrchestrationModal({
           )}
         </div>
 
-        {/* ── Footer ── */}
+        {/* Footer */}
         <div className="bg-white p-4 border-t border-[#E2E8F0] flex items-center justify-between shrink-0">
           <span className="text-xs text-[#64748B]">
-            {isCompleted ? '✓ Model ready for local inference at hospitals.' : 'Round progressing across cluster...'}
+            {isCompleted
+              ? '✓ Central Model Updated Successfully — ready for inference at all hospitals.'
+              : `Round progressing across ${totalExpected} hospital node(s)...`}
           </span>
           <button
             onClick={onClose}
