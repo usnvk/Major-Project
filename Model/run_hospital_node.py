@@ -512,6 +512,7 @@ def main():
                         print(f"{YELLOW}[MODEL] Binary download notice: {b_err}. Continuing with local model.{RESET}")
 
                 heartbeat_daemon.model_version = global_version
+                global_weights = {k: v.clone().detach() for k, v in model.named_parameters()}
 
                 # Notify central server of local training start
                 post_json(
@@ -548,12 +549,12 @@ def main():
                     outputs = model(inputs)
                     loss = criterion(outputs, targets)
 
-                    # FedProx proximal regularization term
+                    # True FedProx proximal regularization term: (mu / 2) * ||w - w_global||^2
                     proximal_loss = 0.0
-                    if args.mu > 0:
-                        for p in model.parameters():
-                            if p.requires_grad:
-                                proximal_loss += (args.mu / 2) * torch.norm(p) ** 2
+                    if args.mu > 0 and global_weights:
+                        for name, p in model.named_parameters():
+                            if p.requires_grad and name in global_weights:
+                                proximal_loss += (args.mu / 2) * torch.norm(p - global_weights[name]) ** 2
                         loss = loss + proximal_loss
 
                     loss.backward()
