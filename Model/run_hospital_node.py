@@ -373,8 +373,8 @@ def main():
         print(f"{YELLOW}[CLIENT] ⚠️ WARNING: Could not connect to Central Server at {args.api_server}!{RESET}")
         print(f"{YELLOW}[CLIENT] Ensure Laptop 1 has uvicorn running with '--host 0.0.0.0' and port 8000 is reachable.{RESET}")
 
-    # 4. Initialize Local ResNet-18 Model
-    model = get_resnet18(pretrained=True, privacy_preserving=args.dp).to(device)
+    # 4. Initialize Local ResNet-18 Model (preserve native BatchNorm architecture)
+    model = get_resnet18(pretrained=True, privacy_preserving=False).to(device)
     optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=1e-4)
     criterion = nn.CrossEntropyLoss()
 

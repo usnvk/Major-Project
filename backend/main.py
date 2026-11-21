@@ -145,12 +145,23 @@ def _resolve_model_path() -> Path:
     for candidate in [
         MODELS_DIR / "federated_model.pth",
         MODELS_DIR / "centralized_model.pth",
+        MODEL_DIR / "models" / "federated_model.pth",
+        MODEL_DIR / "centralized_model.pth",
         MODELS_DIR / "tb_public.onnx",
         MODELS_DIR / "tb_public.pth",
     ]:
         if candidate.is_file():
-            return candidate
-    return MODELS_DIR / "federated_model.pth"
+            if candidate.suffix == ".pth":
+                try:
+                    c_loaded = torch.load(candidate, map_location="cpu", weights_only=True)
+                    c_sd = c_loaded.get("model_state_dict", c_loaded) if isinstance(c_loaded, dict) else c_loaded
+                    if isinstance(c_sd, dict) and "bn1.running_mean" in c_sd:
+                        return candidate
+                except Exception:
+                    continue
+            else:
+                return candidate
+    return MODELS_DIR / "centralized_model.pth"
 
 
 MODEL_PATH = _resolve_model_path()

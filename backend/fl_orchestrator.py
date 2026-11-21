@@ -454,8 +454,25 @@ class FederatedOrchestrator:
             f"{nid}: {n}/{total_samples}={n/total_samples:.4f}" for n, _, nid in updates
         ))
 
+        # Base state dict from existing model to ensure all buffers (e.g. BatchNorm statistics) are preserved
+        base_state_dict = {}
+        for candidate_base in [
+            BACKEND_DIR / "models" / "centralized_model.pth",
+            MODEL_DIR / "centralized_model.pth",
+            BACKEND_DIR / "models" / "federated_model.pth",
+        ]:
+            if candidate_base.is_file():
+                try:
+                    loaded_b = torch.load(candidate_base, map_location="cpu", weights_only=True)
+                    candidate_sd = loaded_b.get("model_state_dict", loaded_b) if isinstance(loaded_b, dict) else loaded_b
+                    if isinstance(candidate_sd, dict) and "bn1.running_mean" in candidate_sd:
+                        base_state_dict = dict(candidate_sd)
+                        break
+                except Exception:
+                    pass
+
         try:
-            aggregated = {}
+            aggregated = dict(base_state_dict) if base_state_dict else {}
             first_keys = list(updates[0][1].keys())
             for key in first_keys:
                 orig_dtype = updates[0][1][key].dtype

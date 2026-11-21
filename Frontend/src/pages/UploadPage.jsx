@@ -55,7 +55,11 @@ export default function UploadPage({ onPredictionSuccess }) {
         <>
           {error && (
             <ErrorMessage
-              title="Prediction Failed"
+              title={
+                error.toLowerCase().includes('not a valid') || error.toLowerCase().includes('rejected')
+                  ? 'Invalid Radiograph / Non-Chest Image'
+                  : 'Prediction Failed'
+              }
               message={error}
               onRetry={handleAnalyze}
             />
