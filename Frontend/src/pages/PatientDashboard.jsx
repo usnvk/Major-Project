@@ -506,9 +506,9 @@ export default function PatientDashboard({ onNavigate }) {
                       </div>
                     </div>
 
-                    {/* Image & Heatmap Pair */}
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-                      <div className="p-2 bg-slate-900 rounded-xl text-center min-h-[180px] flex flex-col items-center justify-center">
+                    {/* High-Resolution Chest Radiograph Only */}
+                    <div className="pt-1">
+                      <div className="p-3 bg-slate-950 rounded-xl text-center min-h-[220px] flex flex-col items-center justify-center">
                         <img
                           src={resolveCxrImage(
                             v.xray_image_path || v.image_url || v.imageUrl,
@@ -517,8 +517,9 @@ export default function PatientDashboard({ onNavigate }) {
                             `CHEST RADIOGRAPH (VISIT #${v.visit_number || idx + 1})`
                           )}
                           alt="Visit Radiograph"
-                          className="max-h-52 w-full object-contain rounded-lg shadow-sm"
+                          className="max-h-60 w-full object-contain rounded-lg shadow-sm"
                           onError={(e) => {
+                            e.currentTarget.onerror = null;
                             e.currentTarget.src = generateClinicalCxrSvgDataUrl({
                               isPositive: (v.ai_prediction || v.result || '').includes('Positive'),
                               isHeatmap: false,
@@ -526,28 +527,7 @@ export default function PatientDashboard({ onNavigate }) {
                             });
                           }}
                         />
-                        <span className="text-[10px] text-slate-400 mt-1 font-medium">Diagnostic Chest Radiograph (PA View)</span>
-                      </div>
-
-                      <div className="p-2 bg-slate-900 rounded-xl text-center min-h-[180px] flex flex-col items-center justify-center">
-                        <img
-                          src={resolveCxrImage(
-                            v.heatmap_image_path || v.heatmap_url || v.heatmapUrl,
-                            (v.ai_prediction || v.result || '').includes('Positive'),
-                            true,
-                            `GRAD-CAM++ HEATMAP (VISIT #${v.visit_number || idx + 1})`
-                          )}
-                          alt="Grad-CAM Lesion Heatmap"
-                          className="max-h-52 w-full object-contain rounded-lg shadow-sm"
-                          onError={(e) => {
-                            e.currentTarget.src = generateClinicalCxrSvgDataUrl({
-                              isPositive: (v.ai_prediction || v.result || '').includes('Positive'),
-                              isHeatmap: true,
-                              title: `GRAD-CAM++ LESION LOCALIZATION`
-                            });
-                          }}
-                        />
-                        <span className="text-[10px] text-amber-400 mt-1 font-medium">Grad-CAM++ Neural Lesion Localization</span>
+                        <span className="text-[11px] text-slate-300 mt-2 font-mono">Diagnostic Chest Radiograph (PA View)</span>
                       </div>
                     </div>
 

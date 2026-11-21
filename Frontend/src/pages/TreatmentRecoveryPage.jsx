@@ -961,9 +961,9 @@ export default function TreatmentRecoveryPage({ onNavigate }) {
                               </div>
                             </div>
 
-                            {/* CXR Image & Grad-CAM Heatmap */}
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-3">
-                              <div className="bg-slate-900 rounded-xl p-2 text-center flex flex-col items-center justify-center min-h-[180px]">
+                            {/* High-Resolution Chest Radiograph Only */}
+                            <div className="pt-3">
+                              <div className="bg-slate-950 rounded-xl p-3 text-center flex flex-col items-center justify-center min-h-[220px]">
                                 <img
                                   src={resolveCxrImage(
                                     v.xray_image_path,
@@ -972,8 +972,9 @@ export default function TreatmentRecoveryPage({ onNavigate }) {
                                     `ENCOUNTER #${v.visit_number || idx + 1} CXR`
                                   )}
                                   alt="Encounter CXR"
-                                  className="max-h-48 w-full object-contain rounded-lg shadow-sm"
+                                  className="max-h-60 w-full object-contain rounded-lg shadow-sm"
                                   onError={(e) => {
+                                    e.currentTarget.onerror = null;
                                     e.currentTarget.src = generateClinicalCxrSvgDataUrl({
                                       isPositive: (v.ai_prediction || '').includes('Positive'),
                                       isHeatmap: false,
@@ -981,28 +982,7 @@ export default function TreatmentRecoveryPage({ onNavigate }) {
                                     });
                                   }}
                                 />
-                                <span className="text-[10px] text-slate-400 mt-1 font-medium">Chest Radiograph (PA View)</span>
-                              </div>
-
-                              <div className="bg-slate-900 rounded-xl p-2 text-center flex flex-col items-center justify-center min-h-[180px]">
-                                <img
-                                  src={resolveCxrImage(
-                                    v.heatmap_image_path,
-                                    (v.ai_prediction || '').includes('Positive'),
-                                    true,
-                                    `GRAD-CAM++ HEATMAP`
-                                  )}
-                                  alt="Grad-CAM Lesion Map"
-                                  className="max-h-48 w-full object-contain rounded-lg shadow-sm"
-                                  onError={(e) => {
-                                    e.currentTarget.src = generateClinicalCxrSvgDataUrl({
-                                      isPositive: (v.ai_prediction || '').includes('Positive'),
-                                      isHeatmap: true,
-                                      title: `GRAD-CAM++ LESION LOCALIZATION`
-                                    });
-                                  }}
-                                />
-                                <span className="text-[10px] text-amber-400 mt-1 font-medium">Grad-CAM++ Lesion Map</span>
+                                <span className="text-[11px] text-slate-300 mt-2 font-mono">Chest Radiograph (PA View)</span>
                               </div>
                             </div>
 
@@ -1051,24 +1031,27 @@ export default function TreatmentRecoveryPage({ onNavigate }) {
                         </span>
                       </div>
 
-                      <div className="p-2 bg-slate-900 rounded-xl text-center min-h-[200px] flex items-center justify-center">
+                      {/* High-Resolution Chest Radiograph Only */}
+                      <div className="p-3 bg-slate-950 rounded-xl text-center min-h-[260px] flex flex-col items-center justify-center">
                         <img
                           src={resolveCxrImage(
-                            patientDetail.visits?.[patientDetail.visits.length - 1]?.xray_image_path || patientDetail.visits?.[patientDetail.visits.length - 1]?.heatmap_image_path,
-                            true,
+                            patientDetail.visits?.[patientDetail.visits.length - 1]?.xray_image_path || patientDetail.visits?.[patientDetail.visits.length - 1]?.image_url,
+                            (patientDetail.visits?.[patientDetail.visits.length - 1]?.ai_prediction || '').includes('Positive'),
                             false,
-                            'BASELINE SCAN (VISIT #1)'
+                            'BASELINE CHEST RADIOGRAPH (PA)'
                           )}
                           alt="Baseline CXR"
-                          className="max-h-56 w-full mx-auto rounded-lg object-contain shadow-sm"
+                          className="max-h-64 w-full mx-auto rounded-lg object-contain shadow-sm"
                           onError={(e) => {
+                            e.currentTarget.onerror = null;
                             e.currentTarget.src = generateClinicalCxrSvgDataUrl({
                               isPositive: true,
                               isHeatmap: false,
-                              title: 'BASELINE RADIOGRAPH'
+                              title: 'BASELINE CHEST RADIOGRAPH'
                             });
                           }}
                         />
+                        <span className="text-[11px] text-slate-300 mt-2 font-mono">Chest Radiograph (PA View)</span>
                       </div>
 
                       <div className="text-xs text-[#64748B] space-y-1">
@@ -1098,24 +1081,27 @@ export default function TreatmentRecoveryPage({ onNavigate }) {
                         </span>
                       </div>
 
-                      <div className="p-2 bg-slate-900 rounded-xl text-center min-h-[200px] flex items-center justify-center">
+                      {/* High-Resolution Chest Radiograph Only */}
+                      <div className="p-3 bg-slate-950 rounded-xl text-center min-h-[260px] flex flex-col items-center justify-center">
                         <img
                           src={resolveCxrImage(
-                            patientDetail.visits?.[0]?.heatmap_image_path || patientDetail.visits?.[0]?.xray_image_path,
+                            patientDetail.visits?.[0]?.xray_image_path || patientDetail.visits?.[0]?.image_url,
                             (patientDetail.visits?.[0]?.ai_prediction || '').includes('Positive'),
-                            true,
-                            'FOLLOW-UP RADIOGRAPH'
+                            false,
+                            'FOLLOW-UP CHEST RADIOGRAPH (PA)'
                           )}
                           alt="Current Follow-up CXR"
-                          className="max-h-56 w-full mx-auto rounded-lg object-contain shadow-sm"
+                          className="max-h-64 w-full mx-auto rounded-lg object-contain shadow-sm"
                           onError={(e) => {
+                            e.currentTarget.onerror = null;
                             e.currentTarget.src = generateClinicalCxrSvgDataUrl({
                               isPositive: false,
-                              isHeatmap: true,
-                              title: 'FOLLOW-UP RADIOGRAPH'
+                              isHeatmap: false,
+                              title: 'FOLLOW-UP CHEST RADIOGRAPH'
                             });
                           }}
                         />
+                        <span className="text-[11px] text-slate-300 mt-2 font-mono">Follow-up Chest Radiograph (PA View)</span>
                       </div>
 
                       <div className="text-xs text-[#64748B] space-y-1">

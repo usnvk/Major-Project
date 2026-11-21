@@ -1489,7 +1489,7 @@ export default function DoctorDashboard({ onNavigate }) {
                   <span>Longitudinal Chest Radiograph Comparison</span>
                 </h3>
                 <p className="text-xs text-[#64748B] mt-0.5">
-                  Side-by-side comparative analysis of baseline radiograph vs follow-up scan with Grad-CAM lesion evolution.
+                  Side-by-side comparative analysis of baseline radiograph vs follow-up chest radiograph.
                 </p>
               </div>
 
@@ -1549,50 +1549,29 @@ export default function DoctorDashboard({ onNavigate }) {
                           </span>
                         </div>
 
-                        {/* Dual Radiograph & Heatmap Grid */}
-                        <div className="grid grid-cols-2 gap-2">
-                          <div className="p-2 bg-slate-900 rounded-xl text-center min-h-[200px] flex flex-col items-center justify-center">
-                            <img
-                              src={resolveCxrImage(
-                                baselineVisit?.xray_image_path || baselineVisit?.image_url,
-                                true,
-                                false,
-                                'BASELINE CXR (PA)'
-                              )}
-                              alt="Baseline Radiograph"
-                              className="max-h-48 w-full object-contain rounded-lg"
-                              onError={(e) => {
-                                e.currentTarget.onerror = null;
-                                e.currentTarget.src = generateClinicalCxrSvgDataUrl({
-                                  isPositive: true,
-                                  isHeatmap: false,
-                                  title: 'BASELINE RADIOGRAPH'
-                                });
-                              }}
-                            />
-                            <span className="text-[10px] text-slate-400 mt-1 font-mono">Chest Radiograph (PA)</span>
-                          </div>
-
-                          <div className="p-2 bg-slate-900 rounded-xl text-center min-h-[200px] flex flex-col items-center justify-center">
-                            <img
-                              src={resolveCxrImage(
-                                baselineVisit?.heatmap_image_path || baselineVisit?.heatmap_url,
-                                true,
-                                true,
-                                'GRAD-CAM++ LESION MAP'
-                              )}
-                              alt="Baseline Heatmap"
-                              className="max-h-48 w-full object-contain rounded-lg"
-                              onError={(e) => {
-                                e.currentTarget.onerror = null;
-                                e.currentTarget.src = generateClinicalCxrSvgDataUrl({
-                                  isPositive: true,
-                                  isHeatmap: true,
-                                  title: 'GRAD-CAM++ HEATMAP'
-                                });
-                              }}
-                            />
-                            <span className="text-[10px] text-red-400 mt-1 font-mono">Grad-CAM++ Lesion Map</span>
+                        {/* High-Resolution Chest Radiograph Only */}
+                        <div className="p-3 bg-slate-950 rounded-xl text-center min-h-[280px] flex flex-col items-center justify-center relative overflow-hidden">
+                          <img
+                            src={resolveCxrImage(
+                              baselineVisit?.xray_image_path || baselineVisit?.image_url,
+                              (baselineVisit?.ai_prediction || '').includes('Positive'),
+                              false,
+                              'BASELINE CHEST RADIOGRAPH (PA)'
+                            )}
+                            alt="Baseline Chest Radiograph"
+                            className="max-h-72 w-full object-contain rounded-lg shadow-sm"
+                            onError={(e) => {
+                              e.currentTarget.onerror = null;
+                              e.currentTarget.src = generateClinicalCxrSvgDataUrl({
+                                isPositive: (baselineVisit?.ai_prediction || '').includes('Positive'),
+                                isHeatmap: false,
+                                title: 'BASELINE CHEST RADIOGRAPH'
+                              });
+                            }}
+                          />
+                          <div className="mt-2 flex items-center justify-between w-full px-2 text-[11px] text-slate-300 font-mono">
+                            <span>Chest Radiograph (PA View)</span>
+                            <span className="text-slate-400">Baseline Ingestion</span>
                           </div>
                         </div>
 
@@ -1637,50 +1616,29 @@ export default function DoctorDashboard({ onNavigate }) {
                           </span>
                         </div>
 
-                        {/* Dual Radiograph & Heatmap Grid */}
-                        <div className="grid grid-cols-2 gap-2">
-                          <div className="p-2 bg-slate-900 rounded-xl text-center min-h-[200px] flex flex-col items-center justify-center">
-                            <img
-                              src={resolveCxrImage(
-                                followUpVisit?.xray_image_path || followUpVisit?.image_url,
-                                (followUpVisit?.ai_prediction || '').includes('Positive'),
-                                false,
-                                'FOLLOW-UP CXR'
-                              )}
-                              alt="Follow-up Radiograph"
-                              className="max-h-48 w-full object-contain rounded-lg"
-                              onError={(e) => {
-                                e.currentTarget.onerror = null;
-                                e.currentTarget.src = generateClinicalCxrSvgDataUrl({
-                                  isPositive: false,
-                                  isHeatmap: false,
-                                  title: 'FOLLOW-UP RADIOGRAPH'
-                                });
-                              }}
-                            />
-                            <span className="text-[10px] text-slate-400 mt-1 font-mono">Follow-up CXR</span>
-                          </div>
-
-                          <div className="p-2 bg-slate-900 rounded-xl text-center min-h-[200px] flex flex-col items-center justify-center">
-                            <img
-                              src={resolveCxrImage(
-                                followUpVisit?.heatmap_image_path || followUpVisit?.heatmap_url,
-                                (followUpVisit?.ai_prediction || '').includes('Positive'),
-                                true,
-                                'FOLLOW-UP HEATMAP'
-                              )}
-                              alt="Follow-up Heatmap"
-                              className="max-h-48 w-full object-contain rounded-lg"
-                              onError={(e) => {
-                                e.currentTarget.onerror = null;
-                                e.currentTarget.src = generateClinicalCxrSvgDataUrl({
-                                  isPositive: false,
-                                  isHeatmap: true,
-                                  title: 'FOLLOW-UP HEATMAP'
-                                });
-                              }}
-                            />
-                            <span className="text-[10px] text-emerald-400 mt-1 font-mono">Lesion Shrinkage Map</span>
+                        {/* High-Resolution Chest Radiograph Only */}
+                        <div className="p-3 bg-slate-950 rounded-xl text-center min-h-[280px] flex flex-col items-center justify-center relative overflow-hidden">
+                          <img
+                            src={resolveCxrImage(
+                              followUpVisit?.xray_image_path || followUpVisit?.image_url,
+                              (followUpVisit?.ai_prediction || '').includes('Positive'),
+                              false,
+                              'FOLLOW-UP CHEST RADIOGRAPH (PA)'
+                            )}
+                            alt="Follow-up Chest Radiograph"
+                            className="max-h-72 w-full object-contain rounded-lg shadow-sm"
+                            onError={(e) => {
+                              e.currentTarget.onerror = null;
+                              e.currentTarget.src = generateClinicalCxrSvgDataUrl({
+                                isPositive: (followUpVisit?.ai_prediction || '').includes('Positive'),
+                                isHeatmap: false,
+                                title: 'FOLLOW-UP CHEST RADIOGRAPH'
+                              });
+                            }}
+                          />
+                          <div className="mt-2 flex items-center justify-between w-full px-2 text-[11px] text-slate-300 font-mono">
+                            <span>Follow-up Chest Radiograph (PA View)</span>
+                            <span className="text-slate-400">Encounter #{followUpVisit?.visit_number || visits.length}</span>
                           </div>
                         </div>
 
