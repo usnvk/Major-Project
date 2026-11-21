@@ -20,13 +20,17 @@ import {
   Activity,
   ChevronRight,
   Image as ImageIcon,
-  Check
+  Check,
+  Plus,
+  X,
+  AlertCircle
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import {
   fetchScans,
   fetchPatientDetails,
   fetchFollowUps,
+  createFollowUp,
   fetchPatientProgressReport,
   getImageUrl,
   resolveCxrImage,
@@ -62,11 +66,67 @@ export default function PatientDashboard({ onNavigate }) {
     evening: false,
   });
 
+  // Appointment Booking Modal State
+  const [showBookApptModal, setShowBookApptModal] = useState(false);
+  const [apptForm, setApptForm] = useState({
+    scheduled_at: '',
+    reason: 'Routine DOTS Protocol Consultation & Checkup',
+    doctor_email: '',
+  });
+  const [apptLoading, setApptLoading] = useState(false);
+  const [apptFeedback, setApptFeedback] = useState(null);
+
   const toggleMed = (time) => {
     setMedsChecked((prev) => ({ ...prev, [time]: !prev[time] }));
   };
 
   const targetHash = user?.patient_hash || 'PT-FINAL-e7592c33';
+
+  // Handle Book Appointment
+  const handleBookAppointment = async (e) => {
+    e.preventDefault();
+    if (!apptForm.scheduled_at) {
+      alert('Please select a preferred date and time.');
+      return;
+    }
+    setApptLoading(true);
+    setApptFeedback(null);
+
+    const payload = {
+      patient_hash: targetHash,
+      scheduled_at: apptForm.scheduled_at,
+      reason: apptForm.reason || 'Patient Requested Consultation',
+      doctor_email: apptForm.doctor_email || patientDetail?.assigned_doctor_email || 'clinician@hospital.org',
+    };
+
+    const res = await createFollowUp(payload, 'patient');
+    setApptLoading(false);
+
+    if (res.success) {
+      setApptFeedback({
+        type: 'success',
+        msg: 'Appointment successfully booked! Your attending clinician has been notified.',
+      });
+      setTimeout(async () => {
+        setShowBookApptModal(false);
+        setApptFeedback(null);
+        setApptForm({
+          scheduled_at: '',
+          reason: 'Routine DOTS Protocol Consultation & Checkup',
+          doctor_email: '',
+        });
+        const fuRes = await fetchFollowUps(targetHash, 'patient');
+        if (fuRes.success && Array.isArray(fuRes.data)) {
+          setPatientFollowUps(fuRes.data);
+        }
+      }, 1500);
+    } else {
+      setApptFeedback({
+        type: 'error',
+        msg: res.error || 'Failed to book appointment. Please try again.',
+      });
+    }
+  };
 
   // Load patient's own authorized medical records
   useEffect(() => {
@@ -552,14 +612,24 @@ export default function PatientDashboard({ onNavigate }) {
       {activeSection === 'followups' && (
         <div className="space-y-6">
           <div className="bg-white rounded-2xl border border-[#E2E8F0] p-6 shadow-xs space-y-4">
-            <div className="pb-3 border-b border-[#E2E8F0]">
-              <h3 className="font-bold text-base text-[#0F172A] flex items-center gap-2">
-                <Calendar className="w-5 h-5 text-[#2563EB]" />
-                <span>Upcoming Follow-up Schedule & Clinic Appointments</span>
-              </h3>
-              <p className="text-xs text-[#64748B] mt-0.5">
-                Review dates for scheduled follow-ups, sputum retests, and doctor consultations.
-              </p>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-3 border-b border-[#E2E8F0] gap-3">
+              <div>
+                <h3 className="font-bold text-base text-[#0F172A] flex items-center gap-2">
+                  <Calendar className="w-5 h-5 text-[#2563EB]" />
+                  <span>Upcoming Follow-up Schedule & Clinic Appointments</span>
+                </h3>
+                <p className="text-xs text-[#64748B] mt-0.5">
+                  Review dates for scheduled follow-ups, sputum retests, and doctor consultations.
+                </p>
+              </div>
+
+              <button
+                onClick={() => setShowBookApptModal(true)}
+                className="inline-flex items-center space-x-1.5 px-3.5 py-2 rounded-xl bg-[#2563EB] hover:bg-[#1D4ED8] text-white text-xs font-semibold shadow-xs transition shrink-0"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Book Doctor Appointment</span>
+              </button>
             </div>
 
             <div className="divide-y divide-slate-100 border border-slate-200 rounded-xl overflow-hidden text-xs">
@@ -734,6 +804,122 @@ export default function PatientDashboard({ onNavigate }) {
                 </div>
               ))}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Book Doctor Appointment Modal (Patient Self-Service) ── */}
+      {showBookApptModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4 animate-fade-in">
+          <div className="bg-white rounded-2xl border border-[#CBD5E1] shadow-2xl max-w-md w-full p-6 space-y-4 text-xs">
+            <div className="flex items-center justify-between pb-3 border-b border-[#E2E8F0]">
+              <div className="flex items-center space-x-2">
+                <div className="w-8 h-8 rounded-xl bg-blue-50 text-[#2563EB] flex items-center justify-center">
+                  <Calendar className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base text-[#0F172A]">Book Doctor Appointment</h3>
+                  <p className="text-[11px] text-[#64748B]">Schedule your clinical checkup or follow-up review</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowBookApptModal(false)}
+                className="text-slate-400 hover:text-slate-600 text-lg font-bold"
+              >
+                ✕
+              </button>
+            </div>
+
+            {apptFeedback && (
+              <div
+                className={`p-3 rounded-xl border text-xs flex items-center space-x-2 ${
+                  apptFeedback.type === 'success'
+                    ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                    : 'bg-red-50 text-red-800 border-red-200'
+                }`}
+              >
+                {apptFeedback.type === 'success' ? (
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                ) : (
+                  <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+                )}
+                <span>{apptFeedback.msg}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleBookAppointment} className="space-y-3.5">
+              {/* Attending Doctor */}
+              <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-1">
+                <span className="text-[10px] uppercase font-bold text-[#64748B] tracking-wider block">
+                  Attending Pulmonologist
+                </span>
+                <div className="font-bold text-sm text-[#0F172A] flex items-center gap-1.5">
+                  <Stethoscope className="w-4 h-4 text-[#2563EB]" />
+                  <span>{patientDetail?.assigned_doctor_name || 'Dr. Pulmonologist'}</span>
+                </div>
+                <div className="text-[11px] text-[#64748B]">
+                  PulmoScan Regional Hospital &middot; Tuberculosis Department
+                </div>
+              </div>
+
+              {/* Preferred Appointment Date & Time */}
+              <div>
+                <label className="font-semibold text-[#0F172A] block mb-1">
+                  Preferred Appointment Date & Time *
+                </label>
+                <input
+                  type="datetime-local"
+                  required
+                  value={apptForm.scheduled_at}
+                  onChange={(e) => setApptForm({ ...apptForm, scheduled_at: e.target.value })}
+                  className="w-full px-3 py-2 bg-slate-50 border border-[#CBD5E1] rounded-xl text-[#0F172A] focus:outline-none focus:ring-2 focus:ring-[#2563EB]"
+                />
+              </div>
+
+              {/* Purpose / Reason for Visit */}
+              <div>
+                <label className="font-semibold text-[#0F172A] block mb-1">Reason for Visit *</label>
+                <select
+                  value={apptForm.reason}
+                  onChange={(e) => setApptForm({ ...apptForm, reason: e.target.value })}
+                  className="w-full px-3 py-2 bg-slate-50 border border-[#CBD5E1] rounded-xl text-[#0F172A] font-medium focus:outline-none focus:ring-2 focus:ring-[#2563EB]"
+                >
+                  <option value="Routine DOTS Protocol Consultation & Checkup">
+                    Routine DOTS Protocol Consultation & Checkup
+                  </option>
+                  <option value="Sputum Smear Microscopy & CXR Follow-up Review">
+                    Sputum Smear Microscopy & CXR Follow-up Review
+                  </option>
+                  <option value="Medication Tolerability & Side-Effects Check">
+                    Medication Tolerability & Side-Effects Check
+                  </option>
+                  <option value="New Cough or Fever Symptoms Consultation">
+                    New Cough or Fever Symptoms Consultation
+                  </option>
+                  <option value="Treatment Stage Completion & Discharge Evaluation">
+                    Treatment Stage Completion & Discharge Evaluation
+                  </option>
+                </select>
+              </div>
+
+              <div className="pt-2 flex justify-end space-x-2">
+                <button
+                  type="button"
+                  onClick={() => setShowBookApptModal(false)}
+                  className="px-4 py-2 border border-[#CBD5E1] rounded-xl text-[#64748B] hover:bg-slate-50 transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={apptLoading}
+                  className="px-5 py-2 bg-[#2563EB] hover:bg-[#1D4ED8] text-white font-semibold rounded-xl shadow-xs transition disabled:opacity-50 flex items-center space-x-1.5"
+                >
+                  <Calendar className="w-3.5 h-3.5" />
+                  <span>{apptLoading ? 'Booking Appointment...' : 'Confirm Appointment'}</span>
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

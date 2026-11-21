@@ -610,7 +610,7 @@ def list_users(request: Request) -> list[dict[str, Any]]:
 
 @app.post("/follow-ups")
 def add_follow_up(data: FollowUpCreateInput, request: Request) -> dict[str, Any]:
-    _require_session(request, {"doctor", "admin"})
+    _require_session(request, {"doctor", "admin", "patient"})
     return schedule_follow_up(
         follow_up_id=str(uuid.uuid4()),
         patient_hash=data.patient_hash,
