@@ -142,45 +142,41 @@ export default function LoginPage() {
       <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-lg relative z-10">
         <div className="bg-white py-8 px-6 shadow-[0_4px_24px_rgba(15,23,42,0.08)] rounded-3xl border border-[#E2E8F0] sm:px-10">
           
-          {/* Admin System Access Helper Card */}
-          <div className="mb-6 p-3.5 rounded-2xl bg-slate-50 border border-[#E2E8F0] flex items-center justify-between text-xs">
-            <div className="flex items-center space-x-2.5 min-w-0">
-              <div className="w-8 h-8 rounded-lg bg-indigo-100 text-indigo-700 flex items-center justify-center shrink-0">
-                <ShieldCheck className="w-4 h-4" />
+          {/* Demo Quick-Fill Access Toolbar */}
+          <div className="mb-6 p-3 bg-slate-50 rounded-2xl border border-[#E2E8F0] space-y-2.5 text-xs">
+            <div className="flex items-center justify-between px-1">
+              <div className="flex items-center space-x-1.5">
+                <ShieldCheck className="w-4 h-4 text-[#2563EB]" />
+                <span className="font-bold text-[#0F172A] text-xs">Demo Credentials Quick-Fill</span>
               </div>
-              <div className="min-w-0">
-                <div className="font-bold text-[#0F172A]">System Administrator Credentials</div>
-                <div className="text-[11px] text-[#64748B] font-mono">
-                  admin@pulmoscan.org &middot; AdminPass123!
-                </div>
-              </div>
+              <span className="text-[10px] text-[#64748B]">Click any role to populate</span>
             </div>
-            <div className="flex items-center space-x-2 shrink-0">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
               <button
                 type="button"
                 onClick={fillAdminCredentials}
-                className="text-[11px] font-bold text-[#2563EB] hover:text-[#1D4ED8] bg-white px-2.5 py-1.5 rounded-lg border border-[#CBD5E1] shadow-2xs hover:bg-slate-50 transition"
+                className="py-1.5 px-2 bg-white hover:bg-blue-50 text-[#2563EB] hover:border-[#2563EB] font-bold text-[11px] rounded-xl border border-[#CBD5E1] shadow-2xs transition text-center"
               >
                 Fill Admin
               </button>
               <button
                 type="button"
                 onClick={fillHospitalCredentials}
-                className="text-[11px] font-bold text-[#0D9488] hover:text-[#0F766E] bg-white px-2.5 py-1.5 rounded-lg border border-[#CBD5E1] shadow-2xs hover:bg-slate-50 transition"
+                className="py-1.5 px-2 bg-white hover:bg-teal-50 text-[#0D9488] hover:border-[#0D9488] font-bold text-[11px] rounded-xl border border-[#CBD5E1] shadow-2xs transition text-center"
               >
                 Fill Hospital
               </button>
               <button
                 type="button"
                 onClick={fillDoctorCredentials}
-                className="text-[11px] font-bold text-[#6366F1] hover:text-[#4F46E5] bg-white px-2.5 py-1.5 rounded-lg border border-[#CBD5E1] shadow-2xs hover:bg-slate-50 transition"
+                className="py-1.5 px-2 bg-white hover:bg-indigo-50 text-[#6366F1] hover:border-[#6366F1] font-bold text-[11px] rounded-xl border border-[#CBD5E1] shadow-2xs transition text-center"
               >
                 Fill Doctor
               </button>
               <button
                 type="button"
                 onClick={fillPatientCredentials}
-                className="text-[11px] font-bold text-[#059669] hover:text-[#047857] bg-white px-2.5 py-1.5 rounded-lg border border-[#CBD5E1] shadow-2xs hover:bg-slate-50 transition"
+                className="py-1.5 px-2 bg-white hover:bg-emerald-50 text-[#059669] hover:border-[#059669] font-bold text-[11px] rounded-xl border border-[#CBD5E1] shadow-2xs transition text-center"
               >
                 Fill Patient
               </button>
