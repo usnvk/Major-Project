@@ -16,7 +16,7 @@ _BACKEND_DIR = Path(__file__).resolve().parent
 if str(_BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(_BACKEND_DIR))
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile, status
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile, status, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -178,13 +178,27 @@ EDGE_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(20 * 1024 * 1024)))
 RETRAIN_THRESHOLD = int(os.getenv("RETRAIN_THRESHOLD", "5"))
 IMAGE_SIZE = int(os.getenv("IMAGE_SIZE", "224"))
-VALIDATOR_THRESHOLD = float(os.getenv("VALIDATOR_THRESHOLD", "0.35"))
+VALIDATOR_THRESHOLD = float(os.getenv("VALIDATOR_THRESHOLD", "0.60"))
 
 with STAGES_PATH.open(encoding="utf-8") as stage_file:
     stage_data: dict[str, dict[str, Any]] = json.load(stage_file)
 
 init_db()
 app = FastAPI(title="TB Federated AI Backend", version="2.0.0")
+
+SESSION_TOKENS: dict[str, dict[str, Any]] = {}
+
+
+def _require_session(request: Request, allowed_roles: set[str]) -> dict[str, Any]:
+    authorization = request.headers.get("authorization", "")
+    token = authorization.removeprefix("Bearer ").strip()
+    session = SESSION_TOKENS.get(token)
+    if not session:
+        raise HTTPException(status_code=401, detail="Authentication required.")
+    if session["role"] not in allowed_roles:
+        raise HTTPException(status_code=403, detail="Insufficient role permissions.")
+    return session
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -304,6 +318,7 @@ class PatientVisitCreateInput(BaseModel):
     xray_image_path: str | None = None
     heatmap_image_path: str | None = None
     prediction_id: str | None = None
+    prescribed_medicines: list[dict[str, Any]] | None = None
 
 
 class PatientVisitReviewInput(BaseModel):
@@ -474,10 +489,12 @@ def login(creds: LoginInput) -> dict[str, Any]:
     user = authenticate_user(creds.email, creds.password)
     if not user:
         raise HTTPException(status_code=401, detail="Invalid email or password.")
+    token = f"bearer_{uuid.uuid4().hex}"
+    SESSION_TOKENS[token] = user
     return {
         "status": "success",
         "user": user,
-        "token": f"bearer_{uuid.uuid4().hex[:16]}",
+        "token": token,
     }
 
 
@@ -493,17 +510,23 @@ def register(data: RegisterInput) -> dict[str, Any]:
             patient_hash=data.patient_hash,
             hospital_node=data.hospital_node,
         )
+        token = f"bearer_{uuid.uuid4().hex}"
+        SESSION_TOKENS[token] = user
         return {
             "status": "success",
             "user": user,
-            "token": f"bearer_{uuid.uuid4().hex[:16]}",
+            "token": token,
         }
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 
 @app.post("/auth/logout")
-def logout_user_session(data: LogoutInput | None = None) -> dict[str, Any]:
+def logout_user_session(data: LogoutInput | None = None, request: Request = None) -> dict[str, Any]:
+    if request:
+        authorization = request.headers.get("authorization", "")
+        token = authorization.removeprefix("Bearer ").strip()
+        SESSION_TOKENS.pop(token, None)
     user_email = data.email if data and data.email else "user@pulmoscan.org"
     user_role = data.role if data and data.role else "user"
     log_audit_event(
@@ -519,10 +542,8 @@ def logout_user_session(data: LogoutInput | None = None) -> dict[str, Any]:
 
 
 @app.get("/auth/me")
-def get_current_user_profile(email: str) -> dict[str, Any]:
-    user = get_user_by_email(email)
-    if not user:
-        raise HTTPException(status_code=404, detail="User account not found.")
+def get_current_user_profile(request: Request) -> dict[str, Any]:
+    user = _require_session(request, {"admin", "doctor", "patient", "hospital"})
     return {
         "status": "success",
         "user": user,
@@ -545,15 +566,18 @@ def clinical_stats() -> dict[str, Any]:
 
 
 @app.get("/scans")
-def list_scans(role: str = "doctor", patient_hash: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
+def list_scans(request: Request, role: str = "doctor", patient_hash: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
     """Returns real scan records from SQLite, enforcing patient data isolation."""
+    session = _require_session(request, {"admin", "doctor", "patient"})
+    role = session["role"]
+    if role == "patient":
+        patient_hash = session.get("patient_hash")
     return get_scans_by_role(role=role, patient_hash=patient_hash, limit=limit)
 
 
 @app.post("/hospitals")
-def register_hospital(data: HospitalCreateInput, role: str = "admin") -> dict[str, Any]:
-    if role != "admin":
-        raise HTTPException(status_code=403, detail="Only administrators can register hospitals.")
+def register_hospital(data: HospitalCreateInput, request: Request) -> dict[str, Any]:
+    _require_session(request, {"admin"})
     return create_hospital(
         hospital_id=data.hospital_id,
         name=data.name,
@@ -565,9 +589,8 @@ def register_hospital(data: HospitalCreateInput, role: str = "admin") -> dict[st
 
 
 @app.get("/hospitals")
-def list_hospitals(role: str = "admin") -> list[dict[str, Any]]:
-    if role not in {"admin", "doctor", "hospital"}:
-        raise HTTPException(status_code=403, detail="Insufficient role.")
+def list_hospitals(request: Request) -> list[dict[str, Any]]:
+    _require_session(request, {"admin", "doctor", "hospital"})
     hospitals = get_hospitals()
     node_map = fl_orchestrator.nodes
     for h in hospitals:
@@ -580,16 +603,14 @@ def list_hospitals(role: str = "admin") -> list[dict[str, Any]]:
 
 
 @app.get("/users")
-def list_users(role: str = "admin") -> list[dict[str, Any]]:
-    if role != "admin":
-        raise HTTPException(status_code=403, detail="Only administrators can manage users.")
+def list_users(request: Request) -> list[dict[str, Any]]:
+    _require_session(request, {"admin"})
     return get_all_users()
 
 
 @app.post("/follow-ups")
-def add_follow_up(data: FollowUpCreateInput, role: str = "doctor") -> dict[str, Any]:
-    if role not in {"doctor", "admin"}:
-        raise HTTPException(status_code=403, detail="Only doctors or administrators can schedule follow-ups.")
+def add_follow_up(data: FollowUpCreateInput, request: Request) -> dict[str, Any]:
+    _require_session(request, {"doctor", "admin"})
     return schedule_follow_up(
         follow_up_id=str(uuid.uuid4()),
         patient_hash=data.patient_hash,
@@ -601,14 +622,16 @@ def add_follow_up(data: FollowUpCreateInput, role: str = "doctor") -> dict[str, 
 
 
 @app.get("/follow-ups")
-def list_follow_ups(patient_hash: str | None = None, role: str = "doctor") -> list[dict[str, Any]]:
-    if role not in {"doctor", "admin", "patient"}:
-        raise HTTPException(status_code=403, detail="Insufficient role.")
+def list_follow_ups(request: Request, patient_hash: str | None = None) -> list[dict[str, Any]]:
+    session = _require_session(request, {"doctor", "admin", "patient"})
+    if session["role"] == "patient":
+        patient_hash = session.get("patient_hash")
     return get_follow_ups(patient_hash)
 
 
 @app.get("/notifications")
-def notifications(role: str = "doctor") -> list[dict[str, Any]]:
+def notifications(request: Request) -> list[dict[str, Any]]:
+    _require_session(request, {"admin", "doctor", "patient", "hospital"})
     items: list[dict[str, Any]] = []
     stats = get_clinical_stats()
     if stats["pendingReviews"] > 0:
@@ -634,10 +657,41 @@ def notifications(role: str = "doctor") -> list[dict[str, Any]]:
     return items
 
 
+@app.get("/reports/analytics")
+def report_analytics(request: Request) -> dict[str, Any]:
+    session = _require_session(request, {"admin", "doctor", "hospital"})
+    clinical = get_clinical_stats()
+    return {
+        "clinical": clinical,
+        "hospitals": get_hospitals(),
+        "follow_ups": get_follow_ups(),
+        "fl": fl_orchestrator.get_live_status(),
+        "fl_rounds": fl_orchestrator.round_history,
+        "model_registry": fl_orchestrator.model_registry,
+        "audit_events": get_recent_audit_logs(limit=100),
+    }
+
+
+@app.get("/logs/live")
+def live_logs(request: Request) -> dict[str, Any]:
+    _require_session(request, {"admin", "doctor", "hospital"})
+    return {
+        "central": list(fl_orchestrator.events),
+        "hospital_A": [
+            event for event in fl_orchestrator.events
+            if event["payload"].get("node_id") == "node_A"
+        ],
+        "hospital_B": [
+            event for event in fl_orchestrator.events
+            if event["payload"].get("node_id") == "node_B"
+        ],
+        "audit": get_recent_audit_logs(limit=100),
+    }
+
+
 @app.post("/patient-visits")
-def create_visit(data: PatientVisitCreateInput, role: str = "doctor") -> dict[str, Any]:
-    if role not in {"doctor", "admin"}:
-        raise HTTPException(status_code=403, detail="Only doctors or administrators can create patient visits.")
+def create_visit(data: PatientVisitCreateInput, request: Request) -> dict[str, Any]:
+    _require_session(request, {"doctor", "admin"})
     visit_id = str(uuid.uuid4())
     return create_patient_visit(
         visit_id=visit_id,
@@ -653,12 +707,14 @@ def create_visit(data: PatientVisitCreateInput, role: str = "doctor") -> dict[st
         xray_image_path=data.xray_image_path,
         heatmap_image_path=data.heatmap_image_path,
         prediction_id=data.prediction_id,
+        prescribed_medicines=data.prescribed_medicines,
     )
 
 
 @app.get("/patient-visits/{patient_hash}")
-def list_patient_visits(patient_hash: str, role: str = "doctor", viewer_patient_hash: str | None = None) -> list[dict[str, Any]]:
-    if role == "patient" and viewer_patient_hash != patient_hash:
+def list_patient_visits(request: Request, patient_hash: str) -> list[dict[str, Any]]:
+    session = _require_session(request, {"doctor", "admin", "patient"})
+    if session["role"] == "patient" and session.get("patient_hash") != patient_hash:
         raise HTTPException(status_code=403, detail="You cannot access another patient's visit timeline.")
     visits = get_patient_visits(patient_hash)
 
@@ -692,9 +748,8 @@ def list_patient_visits(patient_hash: str, role: str = "doctor", viewer_patient_
 
 
 @app.post("/patient-visits/review")
-def review_visit(data: PatientVisitReviewInput, role: str = "doctor") -> dict[str, Any]:
-    if role != "doctor":
-        raise HTTPException(status_code=403, detail="Only doctors can validate visit progress.")
+def review_visit(data: PatientVisitReviewInput, request: Request) -> dict[str, Any]:
+    _require_session(request, {"doctor"})
     try:
         return review_patient_visit(
             visit_id=data.visit_id,
@@ -978,11 +1033,13 @@ def system_stats() -> dict[str, Any]:
 
 @app.post("/predict")
 async def predict(
+    request: Request,
     file: UploadFile = File(...),
     patient_id: str | None = Form(None),
     patient_name: str | None = Form(None),
     uploaded_by: str | None = Form(None),
 ) -> dict[str, Any]:
+    session = _require_session(request, {"doctor", "patient", "admin"})
     image, is_dicom, auto_patient_hash, dcm_metadata, dcm_path = await _read_image(file)
 
     try:
@@ -995,12 +1052,13 @@ async def predict(
         ) from error
 
     if inference_result.get("status") == "REJECTED":
+        rejection_message = inference_result.get(
+            "rejection_reason",
+            "The uploaded file is not a valid Chest X-Ray radiograph. PulmoScan FL only evaluates frontal (PA/AP) chest radiographs for Tuberculosis screening.",
+        )
         raise HTTPException(
             status_code=422,
-            detail=inference_result.get(
-                "rejection_reason",
-                "Image rejected: Not a valid Chest X-Ray. PulmoScan accepts only Chest Radiographs (CXR).",
-            ),
+            detail=rejection_message,
         )
 
     confidence = float(inference_result["confidence"])

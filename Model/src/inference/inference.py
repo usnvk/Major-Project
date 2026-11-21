@@ -18,8 +18,26 @@ DEFAULT_CONFIG_PATH = "models/validator/validator_config.json"
 DEFAULT_TB_MODEL_PATHS = [
     "models/existing_tb_model/tb_resnet18.pth",
     "centralized_model.pth",
-    "federated_model.pth"
+    "federated_model.pth",
+    "models/federated_model.pth",
+    "../backend/models/federated_model.pth",
+    "backend/models/federated_model.pth",
+    "Model/centralized_model.pth",
+    "../Model/centralized_model.pth",
 ]
+
+def resolve_validator_path(user_path=None):
+    if user_path and os.path.exists(user_path):
+        return user_path
+    for p in [
+        DEFAULT_VALIDATOR_PATH,
+        "backend/models/chest_xray_validator.pth",
+        "../backend/models/chest_xray_validator.pth",
+        "../../backend/models/chest_xray_validator.pth",
+    ]:
+        if os.path.exists(p):
+            return p
+    return None
 
 def load_image(image_input):
     """Loads and converts input image to RGB PIL Image."""
@@ -109,47 +127,43 @@ def predict(image_input, tb_model_path=None, validator_path=DEFAULT_VALIDATOR_PA
         }
         
     # -------------------------------------------------------------
-    # STEP 2: Chest X-Ray Validator Gating Check
+    # STEP 2: Chest X-Ray Validator Domain Check (Non-blocking)
     # -------------------------------------------------------------
-    if not os.path.exists(validator_path):
-        return {
-            "is_valid": False,
-            "status": "ERROR",
-            "rejection_reason": f"Validator checkpoint missing at '{validator_path}'. Run train_validator.py first.",
-            "medical_disclaimer": MEDICAL_DISCLAIMER
-        }
-        
+    resolved_val_path = resolve_validator_path(validator_path)
+    prob_valid = 1.0
     threshold = 0.50
-    if os.path.exists(config_path):
-        with open(config_path, "r") as f:
-            cfg = json.load(f)
-            threshold = cfg.get("optimal_threshold", 0.50)
-            
-    val_transforms = transforms.Compose([
-        transforms.Resize((224, 224)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-    ])
-    
-    val_tensor = val_transforms(pil_img).unsqueeze(0).to(device)
-    
-    validator_model = get_validator_resnet18(pretrained=False).to(device)
-    validator_model.load_state_dict(torch.load(validator_path, map_location=device))
-    validator_model.eval()
-    
-    with torch.no_grad():
-        v_out = validator_model(val_tensor)
-        v_probs = F.softmax(v_out, dim=1)[0]
-        prob_valid = float(v_probs[1].item())
+
+    if resolved_val_path and os.path.exists(resolved_val_path):
+        if os.path.exists(config_path):
+            with open(config_path, "r") as f:
+                cfg = json.load(f)
+                threshold = cfg.get("optimal_threshold", 0.50)
+                
+        val_transforms = transforms.Compose([
+            transforms.Resize((224, 224)),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        ])
         
-    if prob_valid < threshold:
+        val_tensor = val_transforms(pil_img).unsqueeze(0).to(device)
+        validator_model = get_validator_resnet18(pretrained=False).to(device)
+        validator_model.load_state_dict(torch.load(resolved_val_path, map_location=device))
+        validator_model.eval()
+        
+        with torch.no_grad():
+            v_out = validator_model(val_tensor)
+            v_probs = F.softmax(v_out, dim=1)[0]
+            prob_valid = float(v_probs[1].item())
+
+    is_chest_xray = bool(prob_valid >= threshold)
+    if not is_chest_xray:
         return {
             "is_valid": False,
             "status": "REJECTED",
             "validator_probability": round(prob_valid, 4),
             "validator_threshold": round(threshold, 4),
-            "rejection_reason": f"Image rejected as non-Chest X-Ray / OOD (Confidence P(VALID) = {prob_valid:.4f} < Threshold {threshold:.4f}).",
-            "medical_disclaimer": MEDICAL_DISCLAIMER
+            "rejection_reason": f"Image is not a valid Chest X-Ray (CXR score: {prob_valid:.4f} < {threshold:.4f}). TB classification was blocked.",
+            "medical_disclaimer": MEDICAL_DISCLAIMER,
         }
         
     # -------------------------------------------------------------

@@ -263,6 +263,74 @@ class DenseNetGradCAM:
 # Main Inference Class
 # ─────────────────────────────────────────────────────────────────────────────
 
+def validate_chest_xray_domain(image: Image.Image) -> tuple[bool, str | None]:
+    """
+    Physical and photometric gatekeeper checks:
+    Ensures image is monochromatic (grayscale radiograph), has proper contrast and dynamic range,
+    and is not a general photo, document, extremity X-ray, or corrupted image.
+    """
+    rgb = image.convert("RGB")
+    w, h = rgb.size
+
+    # 1. Dimension and aspect ratio
+    if w < 100 or h < 100:
+        return False, f"Image resolution ({w}x{h}) is too low for diagnostic CXR analysis (minimum: 100x100)."
+
+    aspect = w / float(h)
+    if aspect < 0.45 or aspect > 2.2:
+        return False, f"Image aspect ratio ({aspect:.2f}) is atypical for a thoracic radiograph. Please upload a standard PA/AP chest X-ray."
+
+    arr = np.array(rgb, dtype=np.float32)
+
+    # 2. Chromaticity / Color Saturation Check
+    # Radiographs are strictly monochromatic transmission shadows.
+    # Color photos (people, outdoors, charts, selfies) have high channel divergence & HSV saturation.
+    diff_rg = np.abs(arr[:, :, 0] - arr[:, :, 1])
+    diff_gb = np.abs(arr[:, :, 1] - arr[:, :, 2])
+    diff_br = np.abs(arr[:, :, 2] - arr[:, :, 0])
+    mean_color_diff = float(np.mean(diff_rg + diff_gb + diff_br) / 3.0)
+
+    hsv = cv2.cvtColor(np.array(rgb), cv2.COLOR_RGB2HSV)
+    sat = hsv[:, :, 1]
+    mean_sat = float(np.mean(sat))
+    high_sat_ratio = float(np.mean(sat > 25))
+
+    if mean_color_diff > 4.0 or mean_sat > 7.5 or high_sat_ratio > 0.04:
+        return False, (
+            "The uploaded image contains color/chromatic content. "
+            "Chest radiographs are strictly monochromatic (grayscale). "
+            "Photographs of people, pets, everyday objects, or digital graphics cannot be analyzed."
+        )
+
+    # 3. Dynamic range and contrast
+    gray = cv2.cvtColor(np.array(rgb), cv2.COLOR_RGB2GRAY)
+    std_val = float(np.std(gray))
+    mean_val = float(np.mean(gray))
+
+    if std_val < 16.0:
+        return False, f"Image appears blank, flat, or featureless (std={std_val:.1f}). Please upload a valid diagnostic radiograph."
+    if mean_val < 12.0:
+        return False, "Image is pitch black or severely underexposed."
+    if mean_val > 238.0:
+        return False, "Image is pure white or severely overexposed."
+
+    # 4. Text document detection (white paper with text)
+    white_ratio = float(np.mean(gray > 240))
+    if white_ratio > 0.65 and mean_val > 180.0:
+        return False, "Uploaded image appears to be a document or medical report rather than a radiograph."
+
+    # 5. Extremity / Non-thoracic radiograph detection
+    # Hand/foot/limb X-rays typically have >70% pitch-black empty background with small skeletal bones.
+    dark_bg_ratio = float(np.mean(gray < 15))
+    if dark_bg_ratio > 0.70:
+        return False, (
+            "The image appears to be a limb or extremity radiograph (e.g., hand or foot) rather than a chest radiograph. "
+            "PulmoScan FL is designed exclusively for Thoracic Chest Radiographs (PA/AP view)."
+        )
+
+    return True, None
+
+
 class ChestXRayInference:
     """Loads Gatekeeper and federated ResNet-18 checkpoints with Grad-CAM++ explainability."""
 
@@ -270,7 +338,7 @@ class ChestXRayInference:
         self,
         tb_model_path: Path | str,
         validator_model_path: Path | str,
-        validator_threshold: float = 0.35,
+        validator_threshold: float = 0.60,
     ) -> None:
         self.tb_model_path = Path(tb_model_path)
         self.validator_model_path = Path(validator_model_path)
@@ -281,7 +349,7 @@ class ChestXRayInference:
         self._tb_input_name: str | None = None
         self._validator_model: nn.Module | None = None
         self._transform = _transform()
-        self.tb_threshold = 0.15
+        self.tb_threshold = 0.50
 
     def _load_models(self) -> None:
         if self.tb_model_path.suffix.lower() == ".onnx":
@@ -352,28 +420,51 @@ class ChestXRayInference:
     def predict(self, image: Image.Image) -> dict[str, Any]:
         self._load_models()
         rgb_image = image.convert("RGB")
-        tensor = self._transform(rgb_image).unsqueeze(0)
-        assert self._validator_model is not None
 
-        # ── 1. Chest X-Ray Pre-Validation & OOD Gatekeeper Check ──────
-        with torch.inference_mode():
-            validator_probs = functional.softmax(self._validator_model(tensor), dim=1)[0]
-            validator_probability = float(validator_probs[1].item())
-
-        if validator_probability < self.validator_threshold:
+        # ── 1. Physical & Photometric Domain Gatekeeper ──────
+        is_valid_domain, domain_rejection_reason = validate_chest_xray_domain(rgb_image)
+        if not is_valid_domain:
             return {
                 "status": "REJECTED",
-                "validator_probability": round(validator_probability, 4),
+                "is_chest_xray": False,
+                "rejection_reason": domain_rejection_reason,
+                "validator_probability": 0.0,
                 "validator_threshold": self.validator_threshold,
-                "rejection_reason": "Image rejected: Not a valid Chest X-Ray. PulmoScan accepts only Chest Radiographs (CXR).",
-                "class_id": 0,
                 "label": "Invalid Image",
-                "confidence": round(1.0 - validator_probability, 4),
+                "class_id": None,
+                "confidence": 0.0,
                 "heatmap_base64": None,
                 "bounding_boxes": [],
             }
 
-        # ── 2. TB classification + Grad-CAM++ explainability ─────────
+        tensor = self._transform(rgb_image).unsqueeze(0)
+        assert self._validator_model is not None
+
+        # ── 2. Neural Chest X-Ray Gatekeeper Inference ──────
+        with torch.inference_mode():
+            validator_probs = functional.softmax(self._validator_model(tensor), dim=1)[0]
+            validator_probability = float(validator_probs[1].item())
+
+        is_chest_xray = validator_probability >= self.validator_threshold
+        if not is_chest_xray:
+            return {
+                "status": "REJECTED",
+                "is_chest_xray": False,
+                "rejection_reason": (
+                    f"Uploaded image is not recognized as a Chest X-Ray radiograph. "
+                    f"The neural gatekeeper classified this image as non-thoracic (CXR score: {validator_probability:.4f}, "
+                    f"required: >={self.validator_threshold:.2f}). Please upload a frontal PA/AP Chest Radiograph."
+                ),
+                "validator_probability": round(validator_probability, 4),
+                "validator_threshold": self.validator_threshold,
+                "label": "Invalid Image",
+                "class_id": None,
+                "confidence": 0.0,
+                "heatmap_base64": None,
+                "bounding_boxes": [],
+            }
+
+        # ── 3. TB classification + Grad-CAM++ (ONLY FOR VERIFIED CHEST X-RAYS) ─────
         if self._tb_session is not None:
             # Public DenseNet-121 ONNX model: logits [Normal, Tuberculosis].
             input_array = tensor.detach().cpu().numpy().astype(np.float32)
@@ -425,6 +516,7 @@ class ChestXRayInference:
 
         return {
             "status": "ACCEPTED",
+            "is_chest_xray": True,
             "validator_probability": round(validator_probability, 4),
             "validator_threshold": self.validator_threshold,
             "class_id": class_id,

@@ -282,6 +282,39 @@ def train_one_epoch_fedprox(
     return epoch_loss, epoch_acc
 
 
+def train_one_epoch(model: nn.Module, dataloader: DataLoader, criterion: nn.Module, optimizer: torch.optim.Optimizer, device: torch.device) -> Tuple[float, float]:
+    """Standard training epoch without FedProx."""
+    model.train()
+    running_loss = 0.0
+    correct = 0
+    total = 0
+    num_batches = len(dataloader)
+
+    for batch_idx, (images, labels) in enumerate(dataloader, 1):
+        images, labels = images.to(device), labels.to(device)
+
+        optimizer.zero_grad()
+        outputs = model(images)
+        loss = criterion(outputs, labels)
+        loss.backward()
+        optimizer.step()
+
+        running_loss += loss.item() * images.size(0)
+        _, preds = torch.max(outputs, 1)
+        correct += (preds == labels).sum().item()
+        total += labels.size(0)
+
+        if batch_idx % 100 == 0 or batch_idx == num_batches:
+            print(
+                f"    Batch {batch_idx:03d}/{num_batches:03d} | Running Acc: {correct/total*100:.1f}% | Loss: {loss.item():.4f}",
+                flush=True,
+            )
+
+    epoch_loss = running_loss / total
+    epoch_acc = correct / total
+    return epoch_loss, epoch_acc
+
+
 def validate(model: nn.Module, dataloader: DataLoader, criterion: nn.Module, device: torch.device):
     """Evaluates the model on validation/test data."""
     model.eval()

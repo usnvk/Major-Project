@@ -11,6 +11,7 @@ import HistoryPage from './pages/HistoryPage';
 import FederatedMonitorPage from './pages/FederatedMonitorPage';
 import HospitalDashboard from './pages/HospitalDashboard';
 import TreatmentRecoveryPage from './pages/TreatmentRecoveryPage';
+import DoctorDashboard from './pages/DoctorDashboard';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { fetchScans } from './services/api';
 
@@ -35,7 +36,7 @@ function AppContent() {
     } else if (role === 'hospital') {
       setActiveTab('hospital-portal');
     } else {
-      setActiveTab('dashboard');
+      setActiveTab('doctor-portal');
     }
   }, [user?.id, role]);
 
@@ -56,13 +57,20 @@ function AppContent() {
         setActiveTab('patient-portal');
       }
     } else if (role === 'hospital') {
-      if (activeTab !== 'hospital-portal' && activeTab !== 'federated-network') {
+      if (
+        activeTab !== 'hospital-portal' &&
+        activeTab !== 'federated-network' &&
+        activeTab !== 'upload' &&
+        activeTab !== 'result' &&
+        activeTab !== 'history'
+      ) {
         setActiveTab('hospital-portal');
       }
     } else {
       // doctor
       if (
         activeTab !== 'dashboard' &&
+        activeTab !== 'doctor-portal' &&
         activeTab !== 'treatment-hub' &&
         activeTab !== 'upload' &&
         activeTab !== 'result' &&
@@ -147,6 +155,10 @@ function AppContent() {
         {/* Dynamic Page Container with Strict RBAC Content Visibility */}
         <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-7xl w-full mx-auto">
           {/* ── Doctor Only Views ── */}
+          {role === 'doctor' && activeTab === 'doctor-portal' && (
+            <DoctorDashboard onNavigate={setActiveTab} />
+          )}
+
           {role === 'doctor' && activeTab === 'dashboard' && (
             <Dashboard
               historyData={historyData}
@@ -154,8 +166,8 @@ function AppContent() {
             />
           )}
 
-          {/* ── Diagnostic Scan Review (Doctor & Patient) ── */}
-          {(role === 'doctor' || role === 'patient') && activeTab === 'result' && (
+          {/* ── Diagnostic Scan Review (Doctor, Patient & Hospital) ── */}
+          {(role === 'doctor' || role === 'patient' || role === 'hospital') && activeTab === 'result' && (
             <ResultPage
               currentResult={currentResult}
               onBackToUpload={() => setActiveTab('upload')}
@@ -179,11 +191,14 @@ function AppContent() {
           )}
 
           {role === 'hospital' && activeTab === 'hospital-portal' && (
-            <HospitalDashboard />
+            <HospitalDashboard
+              onNavigate={setActiveTab}
+              onPredictionSuccess={handlePredictionSuccess}
+            />
           )}
 
-          {/* ── Scans Ingestion (Doctor & Patient) ── */}
-          {(role === 'doctor' || role === 'patient') && activeTab === 'upload' && (
+          {/* ── Scans Ingestion (Doctor, Patient & Hospital) ── */}
+          {(role === 'doctor' || role === 'patient' || role === 'hospital') && activeTab === 'upload' && (
             <UploadPage
               onPredictionSuccess={handlePredictionSuccess}
             />

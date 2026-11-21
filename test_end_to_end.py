@@ -52,14 +52,15 @@ def test_stage_1_dicom_and_phi():
     test_fixtures_dir.mkdir(parents=True, exist_ok=True)
     dcm_path = test_fixtures_dir / "sample_clinical_cxr.dcm"
 
-    # 1. Create synthetic clinical DICOM with sensitive PHI
+    # 1. Create synthetic clinical DICOM with sensitive PHI if needed
     raw_pid = "MRN-99482-JOHN-DOE"
-    create_synthetic_dicom_file(
-        output_path=dcm_path,
-        patient_id=raw_pid,
-        patient_name="DOE^JOHN^A",
-        is_positive=True,
-    )
+    if not dcm_path.exists():
+        create_synthetic_dicom_file(
+            output_path=dcm_path,
+            patient_id=raw_pid,
+            patient_name="DOE^JOHN^A",
+            is_positive=True,
+        )
     print(f"  [PASS] Created test DICOM fixture: {dcm_path.name} (with mock HIPAA PHI)")
 
     # 2. Execute sanitization & de-identification

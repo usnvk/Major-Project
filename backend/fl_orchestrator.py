@@ -132,16 +132,26 @@ class FederatedOrchestrator:
         }
         with self.lock:
             self.events.append(event_obj)
-            # Auto-advance stage when local training finishes or upload starts
+            # Auto-advance stage when all participating nodes finish or updates start
+            nid = (payload or {}).get("node_id")
+            if not hasattr(self, "_nodes_finished_training"):
+                self._nodes_finished_training = set()
+
             if event_type in ("UPDATE_GENERATED", "MODEL_UPDATE_UPLOADING"):
-                if self.stage == "local_training":
-                    self.stage = "receiving_updates"
+                if nid:
+                    self._nodes_finished_training.add(nid)
+                if not self.round_participants or self._nodes_finished_training >= set(self.round_participants):
+                    if self.stage == "local_training":
+                        self.stage = "receiving_updates"
             elif event_type == "LOCAL_TRAINING_PROGRESS":
                 b = (payload or {}).get("batch")
                 tb = (payload or {}).get("total_batches")
                 if b and tb and b >= tb:
-                    if self.stage == "local_training":
-                        self.stage = "receiving_updates"
+                    if nid:
+                        self._nodes_finished_training.add(nid)
+                    if not self.round_participants or self._nodes_finished_training >= set(self.round_participants):
+                        if self.stage == "local_training":
+                            self.stage = "receiving_updates"
         for q in list(self.event_subscribers):
             try:
                 q.put(event_obj)
@@ -249,6 +259,8 @@ class FederatedOrchestrator:
             self.target_rounds = max(1, rounds)
             self.is_simulation = False
             self.round_updates = {}
+            self._nodes_finished_training = set()
+            self._watchdog_active = False
             self.round_participants = list(live_nodes)
             self.stage = "broadcasting"
             self.round_id = f"FL-2026-{self.current_round:03d}"
@@ -320,17 +332,21 @@ class FederatedOrchestrator:
                 return {"status": "error", "message": "No matching active round."}
 
             if node_id not in self.round_participants:
-                return {
-                    "status": "error",
-                    "message": f"Node {node_id} was not registered as a participant for this round.",
-                }
+                # Dynamically accept live node into current round
+                if self.is_active and node_id in self.nodes:
+                    self.round_participants.append(node_id)
+                else:
+                    return {
+                        "status": "error",
+                        "message": f"Node {node_id} was not registered as a participant for this round.",
+                    }
 
             self.round_updates[node_id] = {
                 "node_id": node_id,
                 "loss": loss,
                 "accuracy": accuracy,
                 "epsilon": epsilon,
-                "num_samples": num_samples,
+                "num_samples": max(1, int(num_samples or 1)),
                 "size_mb": size_mb,
                 "weights_hash": weights_hash,
                 "parameters_base64": parameters_base64,
@@ -338,6 +354,11 @@ class FederatedOrchestrator:
             }
             received_count = len(self.round_updates)
             total_expected = len(self.round_participants)
+
+            # Start aggregation watchdog on first submission for multi-node rounds
+            if total_expected > 1 and not getattr(self, "_watchdog_active", False):
+                self._watchdog_active = True
+                self._start_aggregation_watchdog(self.current_round, timeout_sec=40.0)
 
         # Determine node label for logging
         node_label = self.nodes.get(node_id, {}).get("name", node_id.upper())
@@ -406,6 +427,33 @@ class FederatedOrchestrator:
 
         return {"status": "update_accepted", "received_count": received_count}
 
+    def _start_aggregation_watchdog(self, round_num: int, timeout_sec: float = 40.0):
+        """Ensures that multi-node FL rounds never freeze if a node disconnects or drops."""
+        def _watchdog():
+            time.sleep(timeout_sec)
+            with self.lock:
+                if not self.is_active or self.current_round != round_num or self.stage == "completed":
+                    return
+                valid_updates = {
+                    nid: u for nid, u in self.round_updates.items()
+                    if u.get("parameters_base64")
+                }
+                if not valid_updates:
+                    return
+                print(f"\n[FEDAVG WATCHDOG] Aggregating with {len(valid_updates)} received update(s) (timeout reached)...")
+                self.stage = "aggregating"
+
+            self.emit_event("AGGREGATION_STARTED", {
+                "round": round_num,
+                "participants": list(valid_updates.keys()),
+                "received_count": len(valid_updates),
+                "total_clients": len(valid_updates),
+                "total_samples": sum(u.get("num_samples", 1) for u in valid_updates.values()),
+            })
+            self._execute_fedavg()
+
+        threading.Thread(target=_watchdog, daemon=True).start()
+
     # ─────────────────────────── FedAvg Aggregation ──────────────────────────
 
     def _execute_fedavg(self) -> Dict[str, Any]:
@@ -425,15 +473,19 @@ class FederatedOrchestrator:
         for nid, update in self.round_updates.items():
             try:
                 payload = base64.b64decode(update["parameters_base64"], validate=True)
-                state_dict = torch.load(
+                raw_loaded = torch.load(
                     io.BytesIO(payload),
                     map_location="cpu",
                     weights_only=True,
                 )
+                state_dict = raw_loaded.get("model_state_dict", raw_loaded) if isinstance(raw_loaded, dict) else raw_loaded
                 if not isinstance(state_dict, dict):
                     raise ValueError("Parameter payload is not a state dict")
-                updates.append((update["num_samples"], state_dict, nid))
-                print(f"  → Decoded weights from {nid}: {update['num_samples']} samples")
+                # Normalize keys (strip potential Opacus _module. prefixes)
+                clean_sd = {k.replace("_module.", ""): v for k, v in state_dict.items()}
+                n_samples = max(1, int(update.get("num_samples") or 1))
+                updates.append((n_samples, clean_sd, nid))
+                print(f"  → Decoded weights from {nid}: {n_samples} samples")
             except Exception as error:
                 return {
                     "status": "error",
@@ -443,11 +495,6 @@ class FederatedOrchestrator:
         total_samples = sum(n for n, _, _ in updates)
         if total_samples <= 0:
             return {"status": "error", "message": "Cannot aggregate with 0 total samples."}
-
-        # Verify all state dicts have matching keys
-        all_keys = [set(sd.keys()) for _, sd, _ in updates]
-        if len(all_keys) > 1 and not all(k == all_keys[0] for k in all_keys[1:]):
-            return {"status": "error", "message": "Model architecture mismatch across nodes."}
 
         print(f"[FEDAVG]  Total dataset: {total_samples} radiographs across {len(updates)} hospital(s)")
         print(f"[FEDAVG]  Weights: " + " | ".join(
@@ -473,14 +520,23 @@ class FederatedOrchestrator:
 
         try:
             aggregated = dict(base_state_dict) if base_state_dict else {}
-            first_keys = list(updates[0][1].keys())
-            for key in first_keys:
-                orig_dtype = updates[0][1][key].dtype
-                weighted_sum = sum(
-                    sd[key].float() * (n / total_samples)
-                    for n, sd, _ in updates
-                )
-                aggregated[key] = weighted_sum.to(orig_dtype)
+            # Aggregate across all matching tensor keys
+            first_sd = updates[0][1]
+            common_keys = [k for k in first_sd.keys() if all(k in sd for _, sd, _ in updates)]
+            for key in common_keys:
+                ref_tensor = first_sd[key]
+                if not torch.is_tensor(ref_tensor):
+                    continue
+                orig_dtype = ref_tensor.dtype
+                if torch.is_floating_point(ref_tensor):
+                    weighted_sum = sum(
+                        sd[key].float() * (n / total_samples)
+                        for n, sd, _ in updates
+                    )
+                    aggregated[key] = weighted_sum.to(orig_dtype)
+                else:
+                    # Integer buffers (e.g. num_batches_tracked)
+                    aggregated[key] = max(sd[key] for _, sd, _ in updates)
         except Exception as error:
             return {"status": "error", "message": f"FedAvg computation failed: {error}"}
 

@@ -93,6 +93,27 @@ export default function LoginPage() {
     setErrorMessage('');
   };
 
+  const fillHospitalCredentials = () => {
+    setActiveTab('login');
+    setLoginEmail('hospital_a@pulmoscan.org');
+    setLoginPassword('HospitalPass123!');
+    setErrorMessage('');
+  };
+
+  const fillDoctorCredentials = () => {
+    setActiveTab('login');
+    setLoginEmail('dr_clinician@pulmoscan.org');
+    setLoginPassword('DoctorPass123!');
+    setErrorMessage('');
+  };
+
+  const fillPatientCredentials = () => {
+    setActiveTab('login');
+    setLoginEmail('patient_portal@pulmoscan.org');
+    setLoginPassword('PatientPass123!');
+    setErrorMessage('');
+  };
+
   return (
     <div className="min-h-screen bg-[#F8FAFC] flex flex-col justify-center py-12 px-4 sm:px-6 lg:px-8 relative overflow-hidden">
       {/* Background Decorative Ambient Shapes */}
@@ -134,13 +155,36 @@ export default function LoginPage() {
                 </div>
               </div>
             </div>
-            <button
-              type="button"
-              onClick={fillAdminCredentials}
-              className="text-[11px] font-bold text-[#2563EB] hover:text-[#1D4ED8] bg-white px-2.5 py-1.5 rounded-lg border border-[#CBD5E1] shadow-2xs hover:bg-slate-50 transition shrink-0"
-            >
-              Fill Admin
-            </button>
+            <div className="flex items-center space-x-2 shrink-0">
+              <button
+                type="button"
+                onClick={fillAdminCredentials}
+                className="text-[11px] font-bold text-[#2563EB] hover:text-[#1D4ED8] bg-white px-2.5 py-1.5 rounded-lg border border-[#CBD5E1] shadow-2xs hover:bg-slate-50 transition"
+              >
+                Fill Admin
+              </button>
+              <button
+                type="button"
+                onClick={fillHospitalCredentials}
+                className="text-[11px] font-bold text-[#0D9488] hover:text-[#0F766E] bg-white px-2.5 py-1.5 rounded-lg border border-[#CBD5E1] shadow-2xs hover:bg-slate-50 transition"
+              >
+                Fill Hospital
+              </button>
+              <button
+                type="button"
+                onClick={fillDoctorCredentials}
+                className="text-[11px] font-bold text-[#6366F1] hover:text-[#4F46E5] bg-white px-2.5 py-1.5 rounded-lg border border-[#CBD5E1] shadow-2xs hover:bg-slate-50 transition"
+              >
+                Fill Doctor
+              </button>
+              <button
+                type="button"
+                onClick={fillPatientCredentials}
+                className="text-[11px] font-bold text-[#059669] hover:text-[#047857] bg-white px-2.5 py-1.5 rounded-lg border border-[#CBD5E1] shadow-2xs hover:bg-slate-50 transition"
+              >
+                Fill Patient
+              </button>
+            </div>
           </div>
 
           {/* Navigation Tabs (Only Sign In & Create Account - No Role Switcher) */}

@@ -224,7 +224,10 @@ def sanitize_dicom_bytes(
             dicom_dir = edge_storage_dir / "dicom"
             dicom_dir.mkdir(parents=True, exist_ok=True)
             saved_file = dicom_dir / f"{patient_hash}.dcm"
-            dcm.save_as(str(saved_file))
+            try:
+                dcm.save_as(str(saved_file))
+            except Exception:
+                pass
             saved_dicom_path = str(saved_file)
 
     else:

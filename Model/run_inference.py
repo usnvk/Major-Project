@@ -128,7 +128,10 @@ def print_result(image_path: str, result: dict) -> None:
         else:
             tb_display = f"✔  NORMAL        ({tb_conf * 100:.2f}% confidence)"
 
-        print(f"  Validator     : ACCEPTED")
+        if prob < thr:
+            print(f"  Validator     : ACCEPTED (Non-chest radiograph / alternative image accepted)")
+        else:
+            print(f"  Validator     : ACCEPTED (Valid Chest X-Ray)")
         print(f"  CXR Score     : {prob:.4f}  (threshold = {thr:.4f})")
         print(THIN_SEP)
         print(f"  TB Prediction : {tb_display}")

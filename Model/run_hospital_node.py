@@ -472,7 +472,7 @@ def main():
             is_active = status_data.get("is_active", False)
 
             # Check if Central Server is calling for client training in the current round
-            if is_active and stage == "local_training" and current_round_num > last_processed_round:
+            if is_active and stage in ("broadcasting", "local_training", "receiving_updates") and current_round_num > last_processed_round:
                 last_processed_round = current_round_num
                 global_version = status_data.get("global_model_version", "v1")
                 active_dataset = data_holder["dataset"]
@@ -529,7 +529,7 @@ def main():
 
                 # Batch parameters
                 batch_limit = 4 if args.demo else min(40, max(5, active_size // args.batch_size))
-                batch_delay = 1.0 if args.demo else 0.05
+                batch_delay = 0.3 if args.demo else 0.05
 
                 model.train()
                 running_loss = 0.0

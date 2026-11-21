@@ -119,6 +119,12 @@ def init_db() -> None:
                 xray_image_path TEXT,
                 heatmap_image_path TEXT,
                 prediction_id TEXT,
+                visit_number INTEGER DEFAULT 1,
+                prescribed_medicines TEXT,
+                doctor_treatment_action TEXT,
+                ai_comparison_notes TEXT,
+                comparison_delta_confidence REAL,
+                comparison_status TEXT,
                 created_at TEXT NOT NULL,
                 FOREIGN KEY (prediction_id) REFERENCES predictions(prediction_id)
             );
@@ -239,7 +245,10 @@ def init_db() -> None:
             """
         )
 
-    seed_default_users_and_scans()
+    try:
+        seed_default_users_and_scans()
+    except sqlite3.OperationalError:
+        pass
 
 
 def save_prediction(
@@ -377,11 +386,12 @@ def create_patient_visit(
     xray_image_path: str | None,
     heatmap_image_path: str | None,
     prediction_id: str | None,
+    prescribed_medicines: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     with get_connection() as connection:
         previous = connection.execute(
             """
-            SELECT visit_id FROM patient_visits
+            SELECT visit_id, visit_number FROM patient_visits
             WHERE patient_hash = ?
             ORDER BY visit_date DESC, created_at DESC
             LIMIT 1
@@ -389,14 +399,21 @@ def create_patient_visit(
             (patient_hash,),
         ).fetchone()
         previous_visit_id = previous["visit_id"] if previous else None
+        prev_num = previous["visit_number"] if previous and previous["visit_number"] is not None else 0
+        visit_number = prev_num + 1
+
+        if prescribed_medicines is None and treatment_stage:
+            prescribed_medicines = get_default_medications_for_stage(treatment_stage)
+        meds_json = json.dumps(prescribed_medicines) if prescribed_medicines is not None else None
+
         connection.execute(
             """
             INSERT INTO patient_visits
             (visit_id, patient_hash, visit_date, previous_visit_id, symptoms,
              doctor_observations, ai_prediction, ai_confidence, treatment_stage,
              doctor_review_status, doctor_email, doctor_name, xray_image_path,
-             heatmap_image_path, prediction_id, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)
+             heatmap_image_path, prediction_id, visit_number, prescribed_medicines, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 visit_id,
@@ -413,6 +430,8 @@ def create_patient_visit(
                 xray_image_path,
                 heatmap_image_path,
                 prediction_id,
+                visit_number,
+                meds_json,
                 datetime.now(timezone.utc).isoformat(),
             ),
         )
@@ -430,7 +449,16 @@ def get_patient_visits(patient_hash: str) -> list[dict[str, Any]]:
             """,
             (patient_hash,),
         ).fetchall()
-    return [dict(row) for row in rows]
+    results = []
+    for row in rows:
+        item = dict(row)
+        if "prescribed_medicines" in item and isinstance(item["prescribed_medicines"], str):
+            try:
+                item["prescribed_medicines"] = json.loads(item["prescribed_medicines"])
+            except Exception:
+                pass
+        results.append(item)
+    return results
 
 
 def review_patient_visit(

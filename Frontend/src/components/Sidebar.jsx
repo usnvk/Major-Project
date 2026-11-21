@@ -47,7 +47,8 @@ export default function Sidebar({ activeTab, setActiveTab, isOpen, onCloseMobile
   } else {
     // Doctor
     navItems = [
-      { id: 'dashboard', label: 'Clinical Dashboard', icon: LayoutDashboard },
+      { id: 'doctor-portal', label: 'Doctor Overview', icon: LayoutDashboard },
+      { id: 'dashboard', label: 'Clinical Dashboard', icon: Stethoscope },
       { id: 'treatment-hub', label: 'Treatment & Recovery', icon: HeartPulse },
       { id: 'upload', label: 'New CXR Analysis', icon: UploadCloud },
       { id: 'result', label: 'AI Diagnostic Review', icon: Clock },
