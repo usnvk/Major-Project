@@ -328,9 +328,17 @@ export const loginUser = async (email, password) => {
     const response = await apiClient.post('/auth/login', { email, password });
     return { success: true, data: response.data };
   } catch (error) {
+    let errorMsg = error.response?.data?.detail;
+    if (!errorMsg) {
+      if (error.code === 'ERR_NETWORK' || !error.response) {
+        errorMsg = 'Backend server is not running or unreachable at http://127.0.0.1:8000. Please start the backend server.';
+      } else {
+        errorMsg = 'Invalid login credentials.';
+      }
+    }
     return {
       success: false,
-      error: error.response?.data?.detail || 'Invalid login credentials.',
+      error: errorMsg,
     };
   }
 };
@@ -340,9 +348,17 @@ export const registerUser = async (userData) => {
     const response = await apiClient.post('/auth/register', userData);
     return { success: true, data: response.data };
   } catch (error) {
+    let errorMsg = error.response?.data?.detail;
+    if (!errorMsg) {
+      if (error.code === 'ERR_NETWORK' || !error.response) {
+        errorMsg = 'Backend server is not running or unreachable at http://127.0.0.1:8000. Please start the backend server.';
+      } else {
+        errorMsg = 'Registration failed.';
+      }
+    }
     return {
       success: false,
-      error: error.response?.data?.detail || 'Registration failed.',
+      error: errorMsg,
     };
   }
 };
